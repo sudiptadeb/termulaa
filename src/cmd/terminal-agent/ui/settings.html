@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ulaa Terminal — Settings</title>
+  <script src="/lib/twind.min.js"></script>
+  <script defer src="/lib/alpine.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen">
+  <div x-data="settingsPage()" x-init="init()" class="max-w-2xl mx-auto px-6 py-10">
+    <div class="flex items-center justify-between mb-8">
+      <h1 class="text-2xl font-semibold text-white">Settings</h1>
+      <a href="/" class="text-sm text-gray-400 hover:text-white transition">&larr; Back</a>
+    </div>
+
+    <!-- Appearance -->
+    <section class="mb-8">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4 pb-2 border-b border-gray-800">Appearance</h2>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <span>Theme</span>
+          <select x-model="settings.theme" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="monokai">Monokai</option>
+            <option value="solarized-dark">Solarized Dark</option>
+            <option value="dracula">Dracula</option>
+            <option value="nord">Nord</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-between">
+          <span>Font Size</span>
+          <select x-model.number="settings.fontSize" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <template x-for="s in [10,11,12,13,14,15,16,18,20,22,24]"><option :value="s" x-text="s"></option></template>
+          </select>
+        </div>
+        <div class="flex items-center justify-between">
+          <span>Font Family</span>
+          <select x-model="settings.fontFamily" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+            <option value="'Fira Code', monospace">Fira Code</option>
+            <option value="Menlo, monospace">Menlo</option>
+            <option value="monospace">System Monospace</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Session -->
+    <section class="mb-8">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4 pb-2 border-b border-gray-800">Session</h2>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <span>Scrollback Limit</span>
+            <p class="text-xs text-gray-500">Max scrollback per session</p>
+          </div>
+          <select x-model="settings.scrollbackLimit" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm">
+            <option value="256KB">256 KB</option>
+            <option value="512KB">512 KB</option>
+            <option value="1MB">1 MB</option>
+            <option value="2MB">2 MB</option>
+            <option value="5MB">5 MB</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-between">
+          <div>
+            <span>History Limit</span>
+            <p class="text-xs text-gray-500">Shell history lines per session (0 = disabled)</p>
+          </div>
+          <input type="number" x-model.number="settings.historyLimit" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-24">
+        </div>
+        <div class="flex items-center justify-between">
+          <div>
+            <span>Delete on Close</span>
+            <p class="text-xs text-gray-500">Remove tab data when browser tab is closed</p>
+          </div>
+          <button @click="settings.deleteOnClose = !settings.deleteOnClose; save()" class="w-10 h-5 rounded-full transition" :class="settings.deleteOnClose ? 'bg-blue-600' : 'bg-gray-700'">
+            <div class="w-4 h-4 bg-white rounded-full transition transform" :class="settings.deleteOnClose ? 'translate-x-5' : 'translate-x-0.5'"></div>
+          </button>
+        </div>
+        <div class="flex items-center justify-between">
+          <div>
+            <span>Cleanup After</span>
+            <p class="text-xs text-gray-500">Auto-delete dead tabs after N days (0 = never)</p>
+          </div>
+          <input type="number" x-model.number="settings.cleanupAfterDays" @change="save()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-24">
+        </div>
+      </div>
+    </section>
+
+    <!-- Connection -->
+    <section class="mb-8">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4 pb-2 border-b border-gray-800">Connection</h2>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <span>Shell</span>
+            <p class="text-xs text-gray-500">Leave empty for auto-detect</p>
+          </div>
+          <input type="text" x-model="settings.shell" @change="save()" placeholder="auto" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-48">
+        </div>
+      </div>
+    </section>
+
+    <!-- Save status -->
+    <div x-show="saved" x-transition class="text-center text-sm text-green-500">Settings saved</div>
+  </div>
+
+  <script>
+  function settingsPage() {
+    return {
+      settings: {},
+      saved: false,
+      async init() {
+        try {
+          const r = await fetch('/api/settings');
+          this.settings = await r.json();
+        } catch (e) { console.error('Failed to load settings:', e); }
+      },
+      async save() {
+        try {
+          await fetch('/api/settings', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.settings)
+          });
+          this.saved = true;
+          setTimeout(() => this.saved = false, 1500);
+        } catch (e) { console.error('Failed to save settings:', e); }
+      }
+    };
+  }
+  </script>
+</body>
+</html>

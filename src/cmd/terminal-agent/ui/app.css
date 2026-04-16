@@ -1,0 +1,74 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; background: #1e1e1e; color: #ccc; font-family: -apple-system, sans-serif; }
+
+/* No header bar — full viewport for terminals */
+#terminal-container { width: 100%; height: 100%; display: flex; overflow: hidden; }
+
+.pane { position: relative; overflow: hidden; border: 1px solid #333; box-sizing: border-box; }
+.pane.active { border-color: #007acc; }
+.pane .xterm { height: 100%; }
+.pane .xterm-viewport { overflow-y: hidden !important; }
+
+.split-container { display: flex; width: 100%; height: 100%; }
+.split-container.horizontal { flex-direction: column; }
+.split-container.vertical { flex-direction: row; }
+
+.resize-handle { background: #333; flex-shrink: 0; z-index: 10; }
+.resize-handle.vertical { width: 4px; cursor: col-resize; }
+.resize-handle.horizontal { height: 4px; cursor: row-resize; }
+.resize-handle:hover { background: #007acc; }
+
+.pane.drag-over { border-color: #4caf50; background: rgba(76, 175, 80, 0.05); }
+
+/* ── Conflict Modal ───────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10000;
+}
+.modal-box {
+  background: #2d2d2d; border: 1px solid #555; border-radius: 8px;
+  padding: 32px 40px; text-align: center; max-width: 420px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.modal-box h2 { color: #e0e0e0; margin-bottom: 12px; font-size: 18px; }
+.modal-box p { color: #aaa; margin-bottom: 24px; font-size: 14px; }
+.modal-buttons { display: flex; gap: 12px; justify-content: center; }
+.modal-buttons button {
+  padding: 10px 20px; border: 1px solid #555; border-radius: 6px;
+  background: #3c3c3c; color: #e0e0e0; cursor: pointer; font-size: 14px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.modal-buttons button:hover { background: #007acc; border-color: #007acc; color: #fff; }
+.modal-buttons button:active { background: #005f99; }
+
+/* ── Watch Mode Badge ─────────────────────────────────────────────────── */
+#watch-badge {
+  position: fixed; top: 8px; right: 8px; z-index: 9999;
+  background: rgba(255, 193, 7, 0.9); color: #000; font-weight: 700;
+  font-size: 11px; padding: 4px 10px; border-radius: 4px;
+  letter-spacing: 1px; pointer-events: none;
+}
+
+/* ── Takeover Banner ──────────────────────────────────────────────────── */
+#takeover-banner {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10001;
+}
+.takeover-content {
+  background: #2d2d2d; border: 1px solid #555; border-radius: 8px;
+  padding: 32px 40px; text-align: center; color: #e0e0e0; font-size: 16px;
+}
+.takeover-content button {
+  margin-top: 16px; padding: 10px 24px; border: 1px solid #555;
+  border-radius: 6px; background: #007acc; color: #fff; cursor: pointer;
+  font-size: 14px;
+}
+.takeover-content button:hover { background: #005f99; }
+
+/* ── Watch mode: dim pane borders ─────────────────────────────────────── */
+body.watch-mode .pane { border-color: #444; }
+body.watch-mode .pane.active { border-color: #666; }

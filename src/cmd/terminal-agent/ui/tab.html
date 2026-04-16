@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Terminal</title>
+  <link rel="stylesheet" href="/lib/xterm.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div id="terminal-container"></div>
+
+  <!-- Conflict modal: shown when tab is active in another window -->
+  <div id="conflict-modal" style="display:none">
+    <div class="modal-overlay">
+      <div class="modal-box">
+        <h2>Tab Active Elsewhere</h2>
+        <p>This tab is open in another window.</p>
+        <div class="modal-buttons">
+          <button onclick="window._resolveConflict('watch')">Watch</button>
+          <button onclick="window._resolveConflict('takeover')">Take Over</button>
+          <button onclick="window._resolveConflict('new')">New Sessions</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Watch mode indicator -->
+  <div id="watch-badge" style="display:none">WATCHING</div>
+
+  <!-- Takeover banner -->
+  <div id="takeover-banner" style="display:none">
+    <div class="takeover-content">
+      Session taken over in another window.
+      <button onclick="location.reload()">Reconnect</button>
+    </div>
+  </div>
+
+  <script src="/lib/xterm.min.js"></script>
+  <script src="/lib/xterm-addon-fit.min.js"></script>
+  <script src="/lib/xterm-addon-webgl.min.js"></script>
+  <script src="/lib/xterm-addon-unicode11.min.js"></script>
+  <script src="/themes.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

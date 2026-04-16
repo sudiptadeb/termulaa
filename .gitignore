@@ -1,0 +1,14 @@
+.idea
+.DS_Store
+.claude/
+.agents/
+
+# Build output (all binaries go here via build/build.sh)
+dist/
+
+# Temp files (configs, debug dumps from local testing)
+.tmp/
+
+# Runtime logs
+*.log
+nohup.out
