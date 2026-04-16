@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ulaa Terminal</title>
+  <script src="/lib/twind.min.js"></script>
+  <script defer src="/lib/alpine.min.js"></script>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen">
+  <div x-data="tabList()" x-init="init()" class="max-w-3xl mx-auto px-6 py-10">
+    <div class="flex items-center justify-between mb-8">
+      <h1 class="text-2xl font-semibold text-white">Ulaa Terminal</h1>
+      <div class="flex gap-2">
+        <a href="/settings" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg hover:border-gray-500 transition">Settings</a>
+        <button @click="createTab()" class="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">+ New Tab</button>
+      </div>
+    </div>
+
+    <!-- Tab cards -->
+    <div class="space-y-2">
+      <template x-for="tab in tabs" :key="tab.id">
+        <a :href="'/tab/' + tab.id" class="flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 rounded-lg border border-gray-800 hover:border-gray-700 transition group">
+          <div class="flex items-center gap-3">
+            <!-- Status dot -->
+            <div class="w-2.5 h-2.5 rounded-full" :class="tab.alive ? 'bg-green-500' : 'bg-red-500'"></div>
+            <div>
+              <div class="text-sm font-medium text-gray-100" x-text="tab.name"></div>
+              <div class="text-xs text-gray-500" x-text="tab.pane_count + ' pane' + (tab.pane_count !== 1 ? 's' : '') + ' · ' + timeAgo(tab.last_active)"></div>
+            </div>
+          </div>
+          <button @click.prevent.stop="deleteTab(tab.id)" class="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition" title="Delete tab">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </a>
+      </template>
+    </div>
+
+    <!-- Empty state -->
+    <div x-show="tabs.length === 0" class="text-center py-20 text-gray-500">
+      <p class="text-lg mb-2">No terminals yet</p>
+      <p class="text-sm">Click "+ New Tab" to create your first terminal</p>
+    </div>
+  </div>
+
+  <script>
+  function tabList() {
+    return {
+      tabs: [],
+      async init() {
+        await this.loadTabs();
+        // Poll every 5s for status updates
+        setInterval(() => this.loadTabs(), 5000);
+      },
+      async loadTabs() {
+        try {
+          const r = await fetch('/api/tabs');
+          this.tabs = await r.json();
+        } catch (e) { console.error('Failed to load tabs:', e); }
+      },
+      async createTab() {
+        try {
+          const r = await fetch('/api/tabs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'Terminal ' + (this.tabs.length + 1)}) });
+          const tab = await r.json();
+          window.location.href = '/tab/' + tab.id;
+        } catch (e) { console.error('Failed to create tab:', e); }
+      },
+      async deleteTab(id) {
+        if (!confirm('Delete this tab and all its sessions?')) return;
+        try {
+          await fetch('/api/tabs/' + id, { method: 'DELETE' });
+          this.tabs = this.tabs.filter(t => t.id !== id);
+        } catch (e) { console.error('Failed to delete tab:', e); }
+      },
+      timeAgo(ts) {
+        if (!ts) return '';
+        const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+      }
+    };
+  }
+  </script>
+</body>
+</html>
