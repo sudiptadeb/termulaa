@@ -170,9 +170,9 @@
     });
 
     term.onTitleChange(function(title) {
-      if (pane.active && title) {
-        document.title = title;
-      }
+      if (!title) return;
+      pane.termTitle = title;
+      refreshTabTitle();
     });
 
     // Clipboard paste
@@ -490,6 +490,7 @@
     initResizeHandle(handle, splitNode);
     refitAll();
     setActivePane(newPane);
+    refreshTabTitle();
   }
 
   /**
@@ -560,6 +561,7 @@
       walkLeaves(sibling, function(p) { leaves.push(p); });
       if (leaves.length > 0) setActivePane(leaves[0]);
     }
+    refreshTabTitle();
   }
 
   function disposePane(pane) {
@@ -602,6 +604,15 @@
     var panes = [];
     if (root) walkLeaves(root, function(p) { if (!p.disposed) panes.push(p); });
     return panes;
+  }
+
+  // refreshTabTitle syncs document.title to the first pane's terminal title.
+  // "First" follows the layout tree's leaf order (upper-left in the split
+  // tree), so splits/closes can reassign which pane drives the tab title.
+  function refreshTabTitle() {
+    var panes = getAllPanes();
+    var title = panes.length > 0 ? panes[0].termTitle : null;
+    document.title = title || 'termulaa';
   }
 
   function findPaneBySessionID(sessionID) {
