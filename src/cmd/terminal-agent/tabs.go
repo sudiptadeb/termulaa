@@ -58,6 +58,17 @@ func (t *Tab) SessionIDs() []string {
 	return ids
 }
 
+// HasSession reports whether the layout currently references the given session.
+func (t *Tab) HasSession(sessionID string) bool {
+	found := false
+	walkLayout(t.Layout, func(node *LayoutNode) {
+		if node.Type == "pane" && node.SessionID == sessionID {
+			found = true
+		}
+	})
+	return found
+}
+
 // Info returns a TabInfo snapshot. It checks whether any pane's session is alive.
 func (t *Tab) Info(sessions map[string]*Session) TabInfo {
 	paneCount := 0
@@ -92,6 +103,27 @@ func walkLayout(node *LayoutNode, fn func(*LayoutNode)) {
 	walkLayout(node.Second, fn)
 }
 
+// layoutMatchesSessionSet verifies that a layout references exactly the given
+// session IDs, with each session appearing once.
+func layoutMatchesSessionSet(node *LayoutNode, expected []string) bool {
+	counts := make(map[string]int, len(expected))
+	walkLayout(node, func(n *LayoutNode) {
+		if n.Type == "pane" && n.SessionID != "" {
+			counts[n.SessionID]++
+		}
+	})
+
+	if len(counts) != len(expected) {
+		return false
+	}
+	for _, id := range expected {
+		if counts[id] != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 // ---------------------------------------------------------------------------
 // Layout tree manipulation (used by tab WS commands)
 // ---------------------------------------------------------------------------
@@ -100,9 +132,9 @@ func walkLayout(node *LayoutNode, fn func(*LayoutNode)) {
 // split node containing the original pane and a new pane with newSessionID.
 // Returns the (possibly new) root. The original tree is mutated in place
 // except when the root itself is the target pane.
-func splitLayoutNode(node *LayoutNode, targetSessionID, newSessionID, direction string) *LayoutNode {
+func splitLayoutNode(node *LayoutNode, targetSessionID, newSessionID, direction string) (*LayoutNode, bool) {
 	if node == nil {
-		return nil
+		return nil, false
 	}
 
 	if node.Type == "pane" && node.SessionID == targetSessionID {
@@ -115,42 +147,56 @@ func splitLayoutNode(node *LayoutNode, targetSessionID, newSessionID, direction 
 				Type:      "pane",
 				SessionID: newSessionID,
 			},
-		}
+		}, true
 	}
 
 	if node.Type == "split" {
-		node.First = splitLayoutNode(node.First, targetSessionID, newSessionID, direction)
-		node.Second = splitLayoutNode(node.Second, targetSessionID, newSessionID, direction)
+		var found bool
+		node.First, found = splitLayoutNode(node.First, targetSessionID, newSessionID, direction)
+		if found {
+			return node, true
+		}
+		node.Second, found = splitLayoutNode(node.Second, targetSessionID, newSessionID, direction)
+		if found {
+			return node, true
+		}
 	}
-	return node
+	return node, false
 }
 
 // closePaneInLayout removes the pane with sessionID and promotes its sibling.
 // Returns the (possibly new) root. If the target is not found, the tree is unchanged.
-func closePaneInLayout(node *LayoutNode, sessionID string) *LayoutNode {
+func closePaneInLayout(node *LayoutNode, sessionID string) (*LayoutNode, bool) {
 	if node == nil {
-		return nil
+		return nil, false
 	}
 
 	// Can't close at the leaf level without knowing the parent.
 	if node.Type == "pane" {
-		return node
+		return node, false
 	}
 
 	if node.Type == "split" {
 		// Direct child is the target — promote sibling.
 		if node.First != nil && node.First.Type == "pane" && node.First.SessionID == sessionID {
-			return node.Second
+			return node.Second, true
 		}
 		if node.Second != nil && node.Second.Type == "pane" && node.Second.SessionID == sessionID {
-			return node.First
+			return node.First, true
 		}
 
 		// Recurse into children.
-		node.First = closePaneInLayout(node.First, sessionID)
-		node.Second = closePaneInLayout(node.Second, sessionID)
+		var found bool
+		node.First, found = closePaneInLayout(node.First, sessionID)
+		if found {
+			return node, true
+		}
+		node.Second, found = closePaneInLayout(node.Second, sessionID)
+		if found {
+			return node, true
+		}
 	}
-	return node
+	return node, false
 }
 
 // replaceAllSessions creates a deep copy of the layout tree with every pane's

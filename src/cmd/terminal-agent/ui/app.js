@@ -9,7 +9,6 @@
  * - Tab WS is connected FIRST and owns the lifecycle.
  * - Split/close/resize commands go through the tab WS.
  * - Session WSes carry raw PTY data (binary) per pane.
- * - Watch mode: input disabled, "WATCHING" badge shown.
  */
 (function() {
   'use strict';
@@ -25,20 +24,25 @@
   var nextPaneId = 1;       // Auto-increment pane ID (local only, for DOM)
   var rootContainer = null; // The #terminal-container div
   var tabWS = null;         // Tab-level ownership WebSocket
-  var tabMode = 'owner';    // 'owner' or 'watch'
+  var ownerToken = '';      // Active tab-owner token for session WS auth
+  var serverSettings = {};  // Server-backed settings from /api/settings
 
   // ── Settings ────────────────────────────────────────────────────────────────
 
-  function loadSettings() {
+  async function loadServerSettings() {
     try {
-      var stored = localStorage.getItem('terminalSettings');
-      if (stored) return JSON.parse(stored);
-    } catch (e) { /* ignore */ }
-    return {};
+      var response = await fetch('/api/settings');
+      if (response.ok) {
+        serverSettings = await response.json();
+      }
+    } catch (e) {
+      console.warn('Failed to load settings, using defaults:', e);
+      serverSettings = {};
+    }
   }
 
   function getTerminalOptions() {
-    var settings = loadSettings();
+    var settings = serverSettings || {};
     var themeName = settings.theme || (window.TERMINAL_DEFAULTS && window.TERMINAL_DEFAULTS.theme) || 'dark';
     var themes = window.TERMINAL_THEMES || {};
     var theme = themes[themeName] || themes.dark || {
@@ -142,9 +146,8 @@
       setActivePane(pane);
     });
 
-    // Wire terminal input — disabled in watch mode and during scrollback replay
+    // Wire terminal input, but defer until scrollback replay completes.
     term.onData(function(data) {
-      if (tabMode === 'watch') return;
       if (pane.replayingScrollback) return;
       if (pane.ws && pane.ws.readyState === WebSocket.OPEN) {
         pane.ws.send(new TextEncoder().encode(data));
@@ -152,7 +155,6 @@
     });
 
     term.onBinary(function(data) {
-      if (tabMode === 'watch') return;
       if (pane.replayingScrollback) return;
       if (pane.ws && pane.ws.readyState === WebSocket.OPEN) {
         var bytes = new Uint8Array(data.length);
@@ -175,7 +177,6 @@
 
     // Clipboard paste
     el.addEventListener('paste', function(e) {
-      if (tabMode === 'watch') return;
       if (!e.clipboardData || !e.clipboardData.items) return;
       var items = e.clipboardData.items;
       for (var i = 0; i < items.length; i++) {
@@ -199,7 +200,6 @@
 
     // Drag & drop
     el.addEventListener('dragover', function(e) {
-      if (tabMode === 'watch') return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
       el.classList.add('drag-over');
@@ -208,7 +208,6 @@
       el.classList.remove('drag-over');
     });
     el.addEventListener('drop', function(e) {
-      if (tabMode === 'watch') return;
       e.preventDefault();
       el.classList.remove('drag-over');
       setActivePane(pane);
@@ -263,8 +262,9 @@
     }
 
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var modeParam = tabMode === 'watch' ? '?mode=watch' : '';
-    var wsUrl = protocol + '//' + window.location.host + '/ws/session/' + pane.sessionID + modeParam;
+    var wsUrl = protocol + '//' + window.location.host + '/ws/session/' + pane.sessionID +
+      '?tab_id=' + encodeURIComponent(window.TAB_ID) +
+      '&token=' + encodeURIComponent(ownerToken);
 
     var ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -402,7 +402,6 @@
    */
   function syncLayout() {
     if (!tabWS || tabWS.readyState !== WebSocket.OPEN) return;
-    if (tabMode === 'watch') return;
 
     var layout = serializeTree(root);
     if (!layout) return;
@@ -417,7 +416,6 @@
    * The server creates the session and broadcasts session_created.
    */
   function splitPane(paneNode, direction) {
-    if (tabMode === 'watch') return;
     if (!tabWS || tabWS.readyState !== WebSocket.OPEN) return;
 
     tabWS.send(JSON.stringify({
@@ -432,7 +430,6 @@
    * The server kills the session and broadcasts pane_closed.
    */
   function requestClosePane(paneNode) {
-    if (tabMode === 'watch') return;
     if (!tabWS || tabWS.readyState !== WebSocket.OPEN) return;
 
     tabWS.send(JSON.stringify({
@@ -822,6 +819,12 @@
         try { p.ws.send(JSON.stringify({ type: 'closing' })); } catch (e) { /* ignore */ }
       }
     }
+
+    if (serverSettings.deleteOnClose && ownerToken) {
+      try {
+        fetch('/api/tabs/' + window.TAB_ID, { method: 'DELETE', keepalive: true });
+      } catch (e) { /* ignore */ }
+    }
   });
 
   // ── Tab WS Message Handling ─────────────────────────────────────────────────
@@ -845,14 +848,6 @@
         applyClosePane(msg.id, msg.layout);
         break;
 
-      case 'layout':
-        // Layout update from another client (resize ratio change).
-        // For watchers: full rebuild. For owner: ignore (we sent it).
-        if (tabMode === 'watch' && msg.layout) {
-          rebuildFromLayout(msg.layout);
-        }
-        break;
-
       case 'disconnected':
         // We've been taken over.
         showTakeoverBanner();
@@ -861,30 +856,6 @@
       case 'error':
         console.error('Tab WS error:', msg.message);
         break;
-    }
-  }
-
-  /**
-   * Full rebuild of the terminal tree from a server layout.
-   * Destroys all existing panes and creates new ones.
-   * Used for watch mode layout syncs and "new sessions" flow.
-   */
-  function rebuildFromLayout(layout) {
-    // Dispose all existing panes.
-    if (root) {
-      walkLeaves(root, function(p) { disposePane(p); });
-    }
-    rootContainer.innerHTML = '';
-    root = null;
-    activePane = null;
-
-    if (layout) {
-      root = reconstructLayout(rootContainer, layout);
-    }
-
-    var panes = getAllPanes();
-    if (panes.length > 0) {
-      setActivePane(panes[0]);
     }
   }
 
@@ -926,16 +897,9 @@
       try { tabWS.close(); } catch (e) { /* ignore */ }
       tabWS = null;
     }
+    ownerToken = '';
 
     document.getElementById('takeover-banner').style.display = '';
-  }
-
-  // ── Watch Mode UI ───────────────────────────────────────────────────────────
-
-  function enterWatchMode() {
-    tabMode = 'watch';
-    document.body.classList.add('watch-mode');
-    document.getElementById('watch-badge').style.display = '';
   }
 
   // ── Tab WS Connection ──────────────────────────────────────────────────────
@@ -977,8 +941,7 @@
                 }
 
                 if (msg2.type === 'connected') {
-                  tabMode = msg2.mode;
-                  if (tabMode === 'watch') enterWatchMode();
+                  ownerToken = msg2.token || '';
                   // Switch to normal message handler.
                   ws.onmessage = handleTabWSMessage;
                   resolve(msg2);
@@ -991,8 +954,7 @@
           }
 
           if (msg.type === 'connected') {
-            tabMode = msg.mode;
-            if (tabMode === 'watch') enterWatchMode();
+            ownerToken = msg.token || '';
             // Switch to normal message handler.
             ws.onmessage = handleTabWSMessage;
             resolve(msg);
@@ -1022,6 +984,7 @@
     }
 
     loadKeybindings();
+    await loadServerSettings();
 
     // Step 1: Connect tab WS and wait for ownership resolution.
     var tabData;
@@ -1029,15 +992,7 @@
       tabData = await connectTabWS();
     } catch (e) {
       console.error('Failed to connect tab WS:', e);
-      // Fallback: try direct REST load (backwards compat).
-      try {
-        var response = await fetch('/api/tabs/' + window.TAB_ID);
-        tabData = await response.json();
-        tabData.layout = tabData.layout || null;
-      } catch (e2) {
-        console.error('Failed to load tab:', e2);
-        return;
-      }
+      return;
     }
 
     // Step 2: Build layout from the connected message.

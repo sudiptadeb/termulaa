@@ -8,13 +8,16 @@ designed, tested, or intended for multi-user or remote use.
 The HTTP server binds to `127.0.0.1` only. It has:
 
 - **No per-request authentication.**
-- **Wildcard CORS** (`Access-Control-Allow-Origin: *`).
-- **No WebSocket origin check** (the upgrader's `CheckOrigin` returns
-  `true`).
+- **Host-header allowlisting** for `127.0.0.1`, `localhost`, and `::1`
+  on the configured port.
+- **Origin allowlisting** for the same loopback origins on both HTTP and
+  WebSocket requests.
+- **No wildcard CORS** — the server echoes only allowed loopback origins.
 
 This means: **any web page loaded in any browser on the same machine can
-call the API and attach to a live PTY**. This is accepted, known risk for a
-single-user dev tool running on a personal machine.
+call the API and attach to a live PTY if it uses an allowed Host/Origin**.
+This is accepted, known risk for a single-user dev tool running on a
+personal machine.
 
 ## Do not expose termulaa on a non-loopback interface
 

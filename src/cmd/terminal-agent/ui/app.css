@@ -43,14 +43,6 @@ html, body { height: 100%; overflow: hidden; background: #1e1e1e; color: #ccc; f
 .modal-buttons button:hover { background: #007acc; border-color: #007acc; color: #fff; }
 .modal-buttons button:active { background: #005f99; }
 
-/* ── Watch Mode Badge ─────────────────────────────────────────────────── */
-#watch-badge {
-  position: fixed; top: 8px; right: 8px; z-index: 9999;
-  background: rgba(255, 193, 7, 0.9); color: #000; font-weight: 700;
-  font-size: 11px; padding: 4px 10px; border-radius: 4px;
-  letter-spacing: 1px; pointer-events: none;
-}
-
 /* ── Takeover Banner ──────────────────────────────────────────────────── */
 #takeover-banner {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -68,7 +60,3 @@ html, body { height: 100%; overflow: hidden; background: #1e1e1e; color: #ccc; f
   font-size: 14px;
 }
 .takeover-content button:hover { background: #005f99; }
-
-/* ── Watch mode: dim pane borders ─────────────────────────────────────── */
-body.watch-mode .pane { border-color: #444; }
-body.watch-mode .pane.active { border-color: #666; }

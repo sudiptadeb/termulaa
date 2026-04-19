@@ -8,11 +8,11 @@
 //   - HTTP listener binds to 127.0.0.1 ONLY (see main() below). Do not
 //     change to 0.0.0.0 or any non-loopback address. The port must
 //     never be reachable from LAN, VPN, or any remote host.
-//   - No per-request auth, wildcard CORS, and CheckOrigin returns true
-//     on the WebSocket upgrader (see handler.go). This is acceptable
-//     *only* because the port is loopback-only — any webpage opened in
-//     a browser on the same machine can call the API and attach to a
-//     PTY. Known, accepted risk for a single-user dev tool.
+//   - No per-request auth. Requests are limited by a Host-header allowlist,
+//     an Origin allowlist, and loopback-only binding. Any page opened in a
+//     browser on the same machine can still reach the service if it uses an
+//     allowed Host/Origin pair. Known, accepted risk for a single-user dev
+//     tool.
 //   - If this ever needs to run on a non-loopback interface, it MUST
 //     first add real per-request auth (bearer secret or OS-local
 //     credential), a locked-down CORS policy, and a strict origin check
@@ -97,9 +97,6 @@ func loadFullConfig() *FullConfig {
 	if cfg.Port == 0 {
 		cfg.Port = def.Port
 	}
-	if cfg.CleanupAfterDays == 0 {
-		cfg.CleanupAfterDays = def.CleanupAfterDays
-	}
 	if cfg.ScrollbackLimit == "" {
 		cfg.ScrollbackLimit = def.ScrollbackLimit
 	}
@@ -142,8 +139,24 @@ func main() {
 		fullCfg.Port = *portFlag
 	}
 
-	// Create manager with minimal Config (what manager needs)
-	mgrCfg := &Config{Port: fullCfg.Port}
+	scrollbackBytes := parseByteSize(fullCfg.ScrollbackLimit)
+	if scrollbackBytes <= 0 {
+		scrollbackBytes = parseByteSize(defaultFullConfig().ScrollbackLimit)
+	}
+
+	// Create manager with the runtime settings it needs.
+	mgrCfg := &Config{
+		Port:             fullCfg.Port,
+		Shell:            fullCfg.Shell,
+		DeleteOnClose:    fullCfg.DeleteOnClose,
+		CleanupAfterDays: fullCfg.CleanupAfterDays,
+		ScrollbackBytes:  scrollbackBytes,
+		HistoryLimit:     fullCfg.HistoryLimit,
+		DefaultCols:      fullCfg.DefaultCols,
+		DefaultRows:      fullCfg.DefaultRows,
+		CWDPollInterval:  parseDuration(fullCfg.CWDPollInterval, 5*time.Second),
+		SavePeriod:       parseDuration(fullCfg.SavePeriod, 5*time.Second),
+	}
 	mgr := NewSessionManager(mgrCfg)
 	mgr.LoadState()
 	mgr.Start(context.Background())

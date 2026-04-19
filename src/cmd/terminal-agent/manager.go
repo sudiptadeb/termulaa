@@ -13,17 +13,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Config holds the terminal-agent configuration.
-// TODO: move to main.go once the full config story is wired up.
+// Config holds the terminal-agent runtime configuration.
 type Config struct {
-	Port int `json:"port"`
+	Port             int
+	Shell            string
+	DeleteOnClose    bool
+	CleanupAfterDays int
+	ScrollbackBytes  int
+	HistoryLimit     int
+	DefaultCols      int
+	DefaultRows      int
+	CWDPollInterval  time.Duration
+	SavePeriod       time.Duration
 }
-
-const (
-	savePeriod       = 30 * time.Second
-	cwdPollInterval  = 3 * time.Second
-	cleanupAfterDays = 7
-)
 
 // stateFile is the JSON structure persisted to ~/.terminal-agent/state.json.
 type stateFile struct {
@@ -35,7 +37,7 @@ type stateFile struct {
 type tabClient struct {
 	conn  *websocket.Conn
 	tabID string
-	mode  string // "owner" or "watch"
+	token string
 }
 
 // SessionManager is the central registry for all sessions and tabs.
@@ -68,7 +70,7 @@ func NewSessionManager(cfg *Config) *SessionManager {
 		tabClients: make(map[string][]*tabClient),
 		cfg:        cfg,
 		dataDir:    dataDir,
-		shell:      findShell(),
+		shell:      resolveShell(cfg.Shell),
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -95,7 +97,7 @@ func (m *SessionManager) historyPath(id string) string {
 
 // LoadState reads state.json and populates the sessions/tabs maps.
 // Restored sessions are marked alive=false since their PTYs are gone.
-// Entries older than cleanupAfterDays are discarded.
+// Entries older than the configured cleanup window are discarded.
 func (m *SessionManager) LoadState() {
 	data, err := os.ReadFile(m.stateFilePath())
 	if err != nil {
@@ -111,14 +113,17 @@ func (m *SessionManager) LoadState() {
 		return
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -cleanupAfterDays)
+	var cutoff time.Time
+	if m.cfg.CleanupAfterDays > 0 {
+		cutoff = time.Now().AddDate(0, 0, -m.cfg.CleanupAfterDays)
+	}
 	loaded := 0
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for id, meta := range state.Sessions {
-		if meta.LastActive.Before(cutoff) {
+		if !cutoff.IsZero() && meta.LastActive.Before(cutoff) {
 			// Clean up old scrollback file.
 			os.Remove(m.scrollbackPath(id))
 			os.Remove(m.historyPath(id))
@@ -135,7 +140,7 @@ func (m *SessionManager) LoadState() {
 			Alive:      false, // PTY is gone after restart
 			CreatedAt:  meta.CreatedAt,
 			LastActive: meta.LastActive,
-			scrollback: NewRingBuffer(scrollbackSize),
+			scrollback: NewRingBuffer(m.scrollbackBytes()),
 			clients:    make([]*wsClient, 0),
 			done:       make(chan struct{}),
 		}
@@ -153,14 +158,31 @@ func (m *SessionManager) LoadState() {
 	}
 
 	for id, tab := range state.Tabs {
-		if tab.LastActive.Before(cutoff) {
+		if !cutoff.IsZero() && tab.LastActive.Before(cutoff) {
 			continue
 		}
 		m.tabs[id] = tab
 	}
 
+	referencedSessions := make(map[string]bool)
+	for _, tab := range m.tabs {
+		for _, sessionID := range tab.SessionIDs() {
+			referencedSessions[sessionID] = true
+		}
+	}
+	orphaned := 0
+	for id := range m.sessions {
+		if referencedSessions[id] {
+			continue
+		}
+		delete(m.sessions, id)
+		os.Remove(m.scrollbackPath(id))
+		os.Remove(m.historyPath(id))
+		orphaned++
+	}
+
 	if loaded > 0 {
-		log.Printf("manager: restored %d sessions, %d tabs from state", loaded, len(m.tabs))
+		log.Printf("manager: restored %d sessions, %d tabs from state (%d orphaned sessions removed)", loaded, len(m.tabs), orphaned)
 	}
 }
 
@@ -237,7 +259,11 @@ func (m *SessionManager) Stop() {
 
 // periodicSave runs SaveState on a ticker until the context is cancelled.
 func (m *SessionManager) periodicSave() {
-	ticker := time.NewTicker(savePeriod)
+	if m.cfg.SavePeriod <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(m.cfg.SavePeriod)
 	defer ticker.Stop()
 
 	for {
@@ -253,7 +279,11 @@ func (m *SessionManager) periodicSave() {
 // pollCWDs periodically updates the CWD of alive sessions by inspecting the
 // foreground process of each PTY.
 func (m *SessionManager) pollCWDs() {
-	ticker := time.NewTicker(cwdPollInterval)
+	if m.cfg.CWDPollInterval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(m.cfg.CWDPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -286,17 +316,66 @@ func (m *SessionManager) pollCWDs() {
 // Session CRUD
 // ---------------------------------------------------------------------------
 
+func (m *SessionManager) scrollbackBytes() int {
+	if m.cfg.ScrollbackBytes > 0 {
+		return m.cfg.ScrollbackBytes
+	}
+	return defaultScrollbackBytes
+}
+
+func (m *SessionManager) defaultSessionCWD() string {
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return "/"
+	}
+	return home
+}
+
+func (m *SessionManager) defaultSessionSize() (int, int) {
+	cols := m.cfg.DefaultCols
+	rows := m.cfg.DefaultRows
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	return cols, rows
+}
+
+func (m *SessionManager) spawnSession(id, cwd string, cols, rows int) (*Session, error) {
+	if cwd == "" {
+		cwd = m.defaultSessionCWD()
+	}
+	if cols <= 0 || rows <= 0 {
+		defaultCols, defaultRows := m.defaultSessionSize()
+		if cols <= 0 {
+			cols = defaultCols
+		}
+		if rows <= 0 {
+			rows = defaultRows
+		}
+	}
+
+	return NewSession(
+		id,
+		m.shell,
+		cwd,
+		cols,
+		rows,
+		m.historyPath(id),
+		m.cfg.HistoryLimit,
+		m.scrollbackBytes(),
+	)
+}
+
 // CreateSession creates a new PTY session with default dimensions.
 func (m *SessionManager) CreateSession() (*Session, error) {
 	id := generateID()
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		home = "/"
-	}
+	cols, rows := m.defaultSessionSize()
+	cwd := m.defaultSessionCWD()
 
-	histFile := m.historyPath(id)
-
-	s, err := NewSession(id, m.shell, home, 80, 24, histFile)
+	s, err := m.spawnSession(id, cwd, cols, rows)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -305,7 +384,7 @@ func (m *SessionManager) CreateSession() (*Session, error) {
 	m.sessions[id] = s
 	m.mu.Unlock()
 
-	log.Printf("manager: created session %s (shell=%s, cwd=%s)", id, m.shell, home)
+	log.Printf("manager: created session %s (shell=%s, cwd=%s)", id, m.shell, cwd)
 	return s, nil
 }
 
@@ -393,8 +472,7 @@ func (m *SessionManager) ReviveSession(id string) (*Session, error) {
 		}
 	}
 
-	histFile := m.historyPath(id)
-	s, err := NewSession(id, m.shell, cwd, cols, rows, histFile)
+	s, err := m.spawnSession(id, cwd, cols, rows)
 	if err != nil {
 		return nil, fmt.Errorf("revive session: %w", err)
 	}
@@ -454,6 +532,9 @@ func (m *SessionManager) UpdateTab(id string, name string, layout *LayoutNode) e
 		tab.Name = name
 	}
 	if layout != nil {
+		if !layoutMatchesSessionSet(layout, tab.SessionIDs()) {
+			return fmt.Errorf("invalid layout")
+		}
 		tab.Layout = layout
 	}
 	tab.LastActive = time.Now()
@@ -471,9 +552,13 @@ func (m *SessionManager) DeleteTab(id string, killSessions bool) error {
 	delete(m.tabs, id)
 	m.mu.Unlock()
 
+	m.DisconnectTabOwner(id)
+
 	if killSessions {
 		for _, sid := range tab.SessionIDs() {
-			m.KillSession(sid)
+			if err := m.DeleteSession(sid); err != nil {
+				log.Printf("manager: failed to delete session %s while deleting tab %s: %v", sid, id, err)
+			}
 		}
 	}
 
@@ -497,40 +582,53 @@ func (m *SessionManager) ListTabs() []TabInfo {
 // Tab Client (ownership WebSocket) management
 // ---------------------------------------------------------------------------
 
-// IsTabActive returns true if the tab has an active owner WS connection.
+// IsTabActive returns true if the tab has an active tab-control WS connection.
 func (m *SessionManager) IsTabActive(tabID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, tc := range m.tabClients[tabID] {
-		if tc.mode == "owner" {
-			return true
-		}
-	}
-	return false
+	return len(m.tabClients[tabID]) > 0
 }
 
-// DisconnectTabOwner sends a "disconnected" message to the current owner
-// and closes their tab WS connection (used for takeover).
+// DisconnectTabOwner sends a "disconnected" message to all active tab-control
+// clients and closes their WS connections. Only one should exist in practice,
+// but the loop keeps cleanup defensive.
 func (m *SessionManager) DisconnectTabOwner(tabID string) {
 	m.mu.Lock()
-	clients := m.tabClients[tabID]
-	var remaining []*tabClient
+	clients := append([]*tabClient(nil), m.tabClients[tabID]...)
+	delete(m.tabClients, tabID)
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	tokens := make(map[string]bool, len(clients))
 	for _, tc := range clients {
-		if tc.mode == "owner" {
-			msg, _ := json.Marshal(map[string]string{
-				"type":   "disconnected",
-				"reason": "takeover",
-			})
-			tc.conn.WriteMessage(websocket.TextMessage, msg)
-			tc.conn.Close()
-			log.Printf("tab-ws: disconnected owner for tab %s (takeover)", tabID)
-		} else {
-			remaining = append(remaining, tc)
+		tokens[tc.token] = true
+		msg, _ := json.Marshal(map[string]string{
+			"type":   "disconnected",
+			"reason": "takeover",
+		})
+		tc.conn.WriteMessage(websocket.TextMessage, msg)
+		tc.conn.Close()
+	}
+
+	disconnectedSessionClients := 0
+	if len(tokens) > 0 {
+		for _, s := range sessions {
+			disconnectedSessionClients += s.DisconnectClients(tabID, tokens)
 		}
 	}
-	m.tabClients[tabID] = remaining
-	m.mu.Unlock()
+
+	if len(clients) > 0 {
+		log.Printf(
+			"tab-ws: disconnected %d tab client(s) and %d session client(s) for tab %s",
+			len(clients),
+			disconnectedSessionClients,
+			tabID,
+		)
+	}
 }
 
 // RegisterTabClient adds a tab WS client to the tracking map.
@@ -538,7 +636,7 @@ func (m *SessionManager) RegisterTabClient(tabID string, tc *tabClient) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tabClients[tabID] = append(m.tabClients[tabID], tc)
-	log.Printf("tab-ws: registered %s client for tab %s (total=%d)", tc.mode, tabID, len(m.tabClients[tabID]))
+	log.Printf("tab-ws: registered client for tab %s (total=%d)", tabID, len(m.tabClients[tabID]))
 }
 
 // UnregisterTabClient removes a specific tab WS client.
@@ -553,7 +651,28 @@ func (m *SessionManager) UnregisterTabClient(tabID string, tc *tabClient) {
 			break
 		}
 	}
-	log.Printf("tab-ws: unregistered %s client for tab %s (remaining=%d)", tc.mode, tabID, len(m.tabClients[tabID]))
+	if len(m.tabClients[tabID]) == 0 {
+		delete(m.tabClients, tabID)
+	}
+	log.Printf("tab-ws: unregistered client for tab %s (remaining=%d)", tabID, len(m.tabClients[tabID]))
+}
+
+// CanAttachSession returns true when the caller presents the active owner token
+// for the tab that currently contains the requested session.
+func (m *SessionManager) CanAttachSession(tabID, sessionID, token string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	tab, ok := m.tabs[tabID]
+	if !ok || !tab.HasSession(sessionID) {
+		return false
+	}
+	for _, tc := range m.tabClients[tabID] {
+		if tc.token == token {
+			return true
+		}
+	}
+	return false
 }
 
 // BroadcastTabEvent sends a JSON message to all tab WS clients for a given tab.
@@ -583,10 +702,15 @@ func (m *SessionManager) BroadcastTabEvent(tabID string, msg interface{}) {
 func (m *SessionManager) SplitPane(tabID, sessionID, direction string) (*Session, *LayoutNode, error) {
 	m.mu.RLock()
 	tab, ok := m.tabs[tabID]
-	m.mu.RUnlock()
 	if !ok {
+		m.mu.RUnlock()
 		return nil, nil, fmt.Errorf("tab %s not found", tabID)
 	}
+	if !tab.HasSession(sessionID) {
+		m.mu.RUnlock()
+		return nil, nil, fmt.Errorf("session %s not found in tab %s", sessionID, tabID)
+	}
+	m.mu.RUnlock()
 
 	newSession, err := m.CreateSession()
 	if err != nil {
@@ -594,7 +718,13 @@ func (m *SessionManager) SplitPane(tabID, sessionID, direction string) (*Session
 	}
 
 	m.mu.Lock()
-	tab.Layout = splitLayoutNode(tab.Layout, sessionID, newSession.ID, direction)
+	var found bool
+	tab.Layout, found = splitLayoutNode(tab.Layout, sessionID, newSession.ID, direction)
+	if !found {
+		m.mu.Unlock()
+		m.DeleteSession(newSession.ID)
+		return nil, nil, fmt.Errorf("session %s not found in tab %s", sessionID, tabID)
+	}
 	tab.LastActive = time.Now()
 	layout := tab.Layout
 	m.mu.Unlock()
@@ -609,13 +739,16 @@ func (m *SessionManager) SplitPane(tabID, sessionID, direction string) (*Session
 func (m *SessionManager) ClosePane(tabID, sessionID string) (*LayoutNode, error) {
 	m.mu.RLock()
 	tab, ok := m.tabs[tabID]
-	m.mu.RUnlock()
 	if !ok {
+		m.mu.RUnlock()
 		return nil, fmt.Errorf("tab %s not found", tabID)
+	}
+	if !tab.HasSession(sessionID) {
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("session %s not found in tab %s", sessionID, tabID)
 	}
 
 	// Check if this is the only pane (root is a pane with this session ID).
-	m.mu.RLock()
 	isLastPane := tab.Layout != nil && tab.Layout.Type == "pane" && tab.Layout.SessionID == sessionID
 	m.mu.RUnlock()
 
@@ -638,7 +771,12 @@ func (m *SessionManager) ClosePane(tabID, sessionID string) (*LayoutNode, error)
 
 	// Remove from layout.
 	m.mu.Lock()
-	tab.Layout = closePaneInLayout(tab.Layout, sessionID)
+	var found bool
+	tab.Layout, found = closePaneInLayout(tab.Layout, sessionID)
+	if !found {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("session %s not found in tab %s", sessionID, tabID)
+	}
 	tab.LastActive = time.Now()
 	layout := tab.Layout
 	m.mu.Unlock()
@@ -663,21 +801,26 @@ func (m *SessionManager) ReplaceTabSessions(tabID string) (*LayoutNode, error) {
 
 	// Generate new layout with fresh session IDs.
 	newLayout, mapping := replaceAllSessions(tab.Layout)
+	oldSessionIDs := tab.SessionIDs()
+	cols, rows := m.defaultSessionSize()
+	cwd := m.defaultSessionCWD()
+	createdSessionIDs := make([]string, 0, len(mapping))
 
 	// Create new sessions for each new ID.
 	for _, newID := range mapping {
-		home, _ := os.UserHomeDir()
-		if home == "" {
-			home = "/"
-		}
-		histFile := m.historyPath(newID)
-		s, err := NewSession(newID, m.shell, home, 80, 24, histFile)
+		s, err := m.spawnSession(newID, cwd, cols, rows)
 		if err != nil {
+			for _, createdID := range createdSessionIDs {
+				if cleanupErr := m.DeleteSession(createdID); cleanupErr != nil {
+					log.Printf("manager: failed to clean up replacement session %s: %v", createdID, cleanupErr)
+				}
+			}
 			return nil, fmt.Errorf("create replacement session: %w", err)
 		}
 		m.mu.Lock()
 		m.sessions[newID] = s
 		m.mu.Unlock()
+		createdSessionIDs = append(createdSessionIDs, newID)
 	}
 
 	// Update tab layout.
@@ -685,6 +828,12 @@ func (m *SessionManager) ReplaceTabSessions(tabID string) (*LayoutNode, error) {
 	tab.Layout = newLayout
 	tab.LastActive = time.Now()
 	m.mu.Unlock()
+
+	for _, oldID := range oldSessionIDs {
+		if err := m.DeleteSession(oldID); err != nil {
+			log.Printf("manager: failed to delete replaced session %s: %v", oldID, err)
+		}
+	}
 
 	m.SaveState()
 	log.Printf("manager: replaced %d sessions in tab %s", len(mapping), tabID)

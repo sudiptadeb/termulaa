@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -137,10 +138,11 @@ func (r *RingBuffer) LoadFrom(path string) error {
 // ---------------------------------------------------------------------------
 
 type wsClient struct {
-	conn *websocket.Conn
-	send chan []byte
-	done chan struct{}
-	mode string // "owner" or "watch" — watch clients cannot send input
+	conn       *websocket.Conn
+	send       chan []byte
+	done       chan struct{}
+	tabID      string
+	ownerToken string
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +199,13 @@ type Session struct {
 }
 
 const (
-	scrollbackSize = 256 * 1024 // 256 KB ring buffer
-	ptyReadBuf     = 16384      // 16 KB read buffer
+	defaultScrollbackBytes = 256 * 1024
+	ptyReadBuf             = 16384
 )
 
 // NewSession spawns a new PTY session with the given parameters.
 // histFile is the path to use for HISTFILE (shell history persistence).
-func NewSession(id, shell, cwd string, cols, rows int, histFile string) (*Session, error) {
+func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyLimit int, scrollbackBytes int) (*Session, error) {
 	// Login-shell convention: argv[0] = "-bash" so the shell reads all startup files.
 	cmd := exec.Command(shell)
 	cmd.Args = []string{"-" + filepath.Base(shell)}
@@ -213,6 +215,12 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string) (*Sessio
 	env := os.Environ()
 	hasTerm := false
 	hasHist := false
+	hasHistSize := false
+	hasHistFileSize := false
+	historyLimitValue := "0"
+	if historyLimit > 0 {
+		historyLimitValue = strconv.Itoa(historyLimit)
+	}
 	for i, e := range env {
 		if strings.HasPrefix(e, "TERM=") {
 			env[i] = "TERM=xterm-256color"
@@ -222,6 +230,14 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string) (*Sessio
 			env[i] = "HISTFILE=" + histFile
 			hasHist = true
 		}
+		if strings.HasPrefix(e, "HISTSIZE=") {
+			env[i] = "HISTSIZE=" + historyLimitValue
+			hasHistSize = true
+		}
+		if strings.HasPrefix(e, "HISTFILESIZE=") {
+			env[i] = "HISTFILESIZE=" + historyLimitValue
+			hasHistFileSize = true
+		}
 	}
 	if !hasTerm {
 		env = append(env, "TERM=xterm-256color")
@@ -229,7 +245,17 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string) (*Sessio
 	if !hasHist && histFile != "" {
 		env = append(env, "HISTFILE="+histFile)
 	}
+	if !hasHistSize {
+		env = append(env, "HISTSIZE="+historyLimitValue)
+	}
+	if !hasHistFileSize {
+		env = append(env, "HISTFILESIZE="+historyLimitValue)
+	}
 	cmd.Env = env
+
+	if scrollbackBytes <= 0 {
+		scrollbackBytes = defaultScrollbackBytes
+	}
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -254,7 +280,7 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string) (*Sessio
 
 		cmd:        cmd,
 		pty:        ptmx,
-		scrollback: NewRingBuffer(scrollbackSize),
+		scrollback: NewRingBuffer(scrollbackBytes),
 		clients:    make([]*wsClient, 0),
 		done:       make(chan struct{}),
 	}
@@ -339,6 +365,24 @@ func (s *Session) DetachClient(c *wsClient) {
 	}
 }
 
+// DisconnectClients closes clients owned by the given tab/token set.
+func (s *Session) DisconnectClients(tabID string, tokens map[string]bool) int {
+	s.mu.Lock()
+	snapshot := make([]*wsClient, len(s.clients))
+	copy(snapshot, s.clients)
+	s.mu.Unlock()
+
+	disconnected := 0
+	for _, c := range snapshot {
+		if c.tabID != tabID || !tokens[c.ownerToken] {
+			continue
+		}
+		c.conn.Close()
+		disconnected++
+	}
+	return disconnected
+}
+
 // Broadcast sends binary data to all attached clients' send channels.
 // Non-blocking: if a client's channel is full, it is skipped.
 func (s *Session) Broadcast(data []byte) {
@@ -407,6 +451,10 @@ func (s *Session) HandleFileDrop(name, dataB64 string) (string, error) {
 
 	log.Printf("Session %s: file saved: %s (%d bytes)", s.ID, path, len(data))
 	return path, nil
+}
+
+func shellQuotePath(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "' "
 }
 
 // Kill sends SIGTERM, waits up to 2 seconds, then SIGKILL. Closes the PTY.
@@ -478,7 +526,18 @@ func (s *Session) Done() <-chan struct{} {
 // findShell — locate the best available shell binary
 // ---------------------------------------------------------------------------
 
-func findShell() string {
+func resolveShell(preferred string) string {
+	if preferred != "" {
+		if strings.Contains(preferred, "/") {
+			if _, err := os.Stat(preferred); err == nil {
+				return preferred
+			}
+		} else if path, err := exec.LookPath(preferred); err == nil {
+			return path
+		}
+		log.Printf("invalid shell %q, falling back to auto-detect", preferred)
+	}
+
 	// Prefer Homebrew bash (5.x) over macOS system bash (3.2).
 	candidates := []string{"/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash", "/usr/bin/bash"}
 	for _, path := range candidates {
@@ -490,4 +549,8 @@ func findShell() string {
 		return path
 	}
 	return "/bin/sh"
+}
+
+func findShell() string {
+	return resolveShell("")
 }

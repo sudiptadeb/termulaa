@@ -189,7 +189,7 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 		handleTabWS(w, r, mgr)
 	})
 
-	// WebSocket — per-session PTY I/O (supports ?mode=watch)
+	// WebSocket — per-session PTY I/O
 	mux.HandleFunc("/ws/session/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
 		handleSessionWS(w, r, mgr)
 	})
@@ -231,8 +231,6 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
 
-	mode := "owner"
-
 	if mgr.IsTabActive(tabID) {
 		// Tab already has an owner — send conflict and wait for resolution.
 		conflictMsg, _ := json.Marshal(map[string]string{
@@ -259,11 +257,8 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		}
 
 		switch resolution.Type {
-		case "watch":
-			mode = "watch"
 		case "takeover":
 			mgr.DisconnectTabOwner(tabID)
-			mode = "owner"
 		case "new":
 			_, err := mgr.ReplaceTabSessions(tabID)
 			if err != nil {
@@ -272,7 +267,7 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 				conn.Close()
 				return
 			}
-			mode = "owner"
+			mgr.DisconnectTabOwner(tabID)
 		default:
 			conn.Close()
 			return
@@ -282,14 +277,14 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 	tc := &tabClient{
 		conn:  conn,
 		tabID: tabID,
-		mode:  mode,
+		token: generateID(),
 	}
 
 	mgr.RegisterTabClient(tabID, tc)
 	defer func() {
 		mgr.UnregisterTabClient(tabID, tc)
 		conn.Close()
-		log.Printf("tab-ws: client disconnected from tab %s (mode=%s)", tabID, mode)
+		log.Printf("tab-ws: client disconnected from tab %s", tabID)
 	}()
 
 	// Send connected message with current layout.
@@ -298,24 +293,19 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		"type":     "connected",
 		"layout":   tab.Layout,
 		"sessions": tab.SessionIDs(),
-		"mode":     mode,
+		"token":    tc.token,
 	})
 	if err := conn.WriteMessage(websocket.TextMessage, connectedMsg); err != nil {
 		return
 	}
 
-	log.Printf("tab-ws: client connected to tab %s (mode=%s, remote=%s)", tabID, mode, r.RemoteAddr)
+	log.Printf("tab-ws: client connected to tab %s (remote=%s)", tabID, r.RemoteAddr)
 
 	// Read loop: handle tab-level commands from the client.
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			break
-		}
-
-		// Watchers cannot modify — silently ignore.
-		if mode == "watch" {
-			continue
 		}
 
 		var cmd struct {
@@ -362,11 +352,6 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 			if cmd.Layout != nil {
 				mgr.UpdateTab(tabID, "", cmd.Layout)
 				mgr.SaveState()
-				// Broadcast to other clients (watchers).
-				mgr.BroadcastTabEvent(tabID, map[string]interface{}{
-					"type":   "layout",
-					"layout": cmd.Layout,
-				})
 			}
 
 		case "rename":
@@ -379,7 +364,7 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 }
 
 // ---------------------------------------------------------------------------
-// handleSessionWS — per-session PTY I/O WebSocket (supports ?mode=watch)
+// handleSessionWS — per-session PTY I/O WebSocket
 // ---------------------------------------------------------------------------
 
 func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
@@ -388,10 +373,15 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		http.Error(w, "invalid session id", http.StatusBadRequest)
 		return
 	}
-
-	mode := r.URL.Query().Get("mode")
-	if mode != "watch" {
-		mode = "owner"
+	tabID := r.URL.Query().Get("tab_id")
+	token := r.URL.Query().Get("token")
+	if !isValidID(tabID) || !isValidID(token) {
+		http.Error(w, "invalid session attachment", http.StatusForbidden)
+		return
+	}
+	if !mgr.CanAttachSession(tabID, sessionID, token) {
+		http.Error(w, "session attachment forbidden", http.StatusForbidden)
+		return
 	}
 
 	// Look up session
@@ -424,14 +414,15 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
 
-	log.Printf("session-ws: client attached to session %s (mode=%s, remote=%s, revived=%v, oldScrollback=%d bytes)", sessionID, mode, r.RemoteAddr, revived, len(oldScrollback))
+	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v, oldScrollback=%d bytes)", sessionID, r.RemoteAddr, revived, len(oldScrollback))
 
 	// Create client
 	client := &wsClient{
-		conn: conn,
-		send: make(chan []byte, 256),
-		done: make(chan struct{}),
-		mode: mode,
+		conn:       conn,
+		send:       make(chan []byte, 256),
+		done:       make(chan struct{}),
+		tabID:      tabID,
+		ownerToken: token,
 	}
 
 	// For revived sessions: send the old scrollback we captured before reviving
@@ -451,7 +442,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	defer func() {
 		sess.DetachClient(client)
 		conn.Close()
-		log.Printf("session-ws: client detached from session %s (mode=%s, remote=%s)", sessionID, mode, r.RemoteAddr)
+		log.Printf("session-ws: client detached from session %s (remote=%s)", sessionID, r.RemoteAddr)
 	}()
 
 	// Writer goroutine: send channel → WebSocket
@@ -479,7 +470,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		}
 	}()
 
-	// Reader loop: WebSocket → PTY (input ignored for watch mode)
+	// Reader loop: WebSocket → PTY
 	for {
 		msgType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -497,17 +488,13 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 			if json.Unmarshal(msg, &control) == nil {
 				switch control.Type {
 				case "resize":
-					// Resize is allowed for all modes (watcher needs correct viewport).
 					sess.Resize(control.Cols, control.Rows)
 					continue
 				case "file":
-					if mode == "watch" {
-						continue
-					}
 					if path, err := sess.HandleFileDrop(control.Name, control.Data); err != nil {
 						log.Printf("File drop error: %v", err)
 					} else {
-						sess.WriteInput([]byte(path))
+						sess.WriteInput([]byte(shellQuotePath(path)))
 					}
 					continue
 				case "closing":
@@ -517,10 +504,6 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 			}
 		}
 
-		// Binary input — only forward for owner mode.
-		if mode == "watch" {
-			continue
-		}
 		sess.WriteInput(msg)
 	}
 
