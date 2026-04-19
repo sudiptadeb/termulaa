@@ -14,6 +14,7 @@ Desktop.ini
 # Agent/tooling local state
 .claude/
 .agents/
+AGENTS.md
 
 # Build output (all binaries go here via build/build.sh)
 dist/
