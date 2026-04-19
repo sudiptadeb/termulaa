@@ -6,7 +6,7 @@ import "time"
 // Leaf nodes have Type="pane" and a SessionID.
 // Internal nodes have Type="split" with a Direction and two children.
 type LayoutNode struct {
-	Type      string      `json:"type"`                // "pane" or "split"
+	Type      string      `json:"type"` // "pane" or "split"
 	SessionID string      `json:"session_id,omitempty"`
 	Direction string      `json:"direction,omitempty"` // "v" (vertical) or "h" (horizontal)
 	Ratio     float64     `json:"ratio,omitempty"`     // 0.0–1.0, split position
