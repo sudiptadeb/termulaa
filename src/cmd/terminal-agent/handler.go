@@ -11,12 +11,32 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// CheckOrigin returns true unconditionally. See the package-level comment
-// in main.go — this is safe only because the listener binds to 127.0.0.1.
-// Do NOT copy this pattern into any binary that listens on a non-loopback
-// interface.
+// wsMaxMessageSize caps a single WebSocket frame. Frames larger than this
+// close the connection — guards against runaway input / buggy clients.
+const wsMaxMessageSize = 1 << 20 // 1 MiB
+
+// upgrader allowlists loopback origins only. Non-browser clients that omit
+// the Origin header are permitted so CLIs like `websocat` keep working.
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		return isOriginAllowed(r.Header.Get("Origin"))
+	},
+}
+
+// setCSP writes a Content-Security-Policy header for HTML responses.
+// `unsafe-eval`/`unsafe-inline` are needed by Alpine.js + Twind; everything
+// else stays same-origin.
+func setCSP(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; "+
+			"script-src 'self' 'unsafe-eval' 'unsafe-inline'; "+
+			"style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data: blob:; "+
+			"font-src 'self' data:; "+
+			"connect-src 'self' ws:; "+
+			"object-src 'none'; "+
+			"base-uri 'self'; "+
+			"frame-ancestors 'none'")
 }
 
 func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
@@ -29,11 +49,16 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 
 	// HTML pages
 	mux.HandleFunc("GET /tab/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if !isValidID(r.PathValue("id")) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		data, err := uiFS.ReadFile("ui/tab.html")
 		if err != nil {
 			http.Error(w, "tab.html not found", http.StatusInternalServerError)
 			return
 		}
+		setCSP(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
 	})
@@ -43,6 +68,7 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 			http.Error(w, "settings.html not found", http.StatusInternalServerError)
 			return
 		}
+		setCSP(w)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
 	})
@@ -68,6 +94,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	})
 	mux.HandleFunc("GET /api/tabs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !isValidID(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		tab := mgr.GetTab(id)
 		if tab == nil {
 			http.Error(w, "tab not found", http.StatusNotFound)
@@ -77,6 +107,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	})
 	mux.HandleFunc("PUT /api/tabs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !isValidID(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		var req struct {
 			Name   string      `json:"name"`
 			Layout *LayoutNode `json:"layout"`
@@ -94,6 +128,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	})
 	mux.HandleFunc("DELETE /api/tabs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !isValidID(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		if err := mgr.DeleteTab(id, true); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -105,6 +143,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	// REST API — Sessions (read/delete only; creation is via tab WS)
 	mux.HandleFunc("GET /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !isValidID(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		s := mgr.GetSession(id)
 		if s == nil {
 			http.Error(w, "session not found", http.StatusNotFound)
@@ -114,6 +156,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	})
 	mux.HandleFunc("DELETE /api/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !isValidID(id) {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		if err := mgr.DeleteSession(id); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -168,6 +214,10 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 
 func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 	tabID := r.PathValue("tabID")
+	if !isValidID(tabID) {
+		http.Error(w, "invalid tab id", http.StatusBadRequest)
+		return
+	}
 	tab := mgr.GetTab(tabID)
 	if tab == nil {
 		http.Error(w, "tab not found", http.StatusNotFound)
@@ -179,6 +229,7 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		log.Printf("tab-ws: upgrade failed: %v", err)
 		return
 	}
+	conn.SetReadLimit(wsMaxMessageSize)
 
 	mode := "owner"
 
@@ -333,8 +384,8 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 
 func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 	sessionID := r.PathValue("sessionID")
-	if sessionID == "" {
-		http.Error(w, "missing session ID", http.StatusBadRequest)
+	if !isValidID(sessionID) {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
 		return
 	}
 
@@ -371,6 +422,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		log.Printf("session-ws: upgrade failed: %v", err)
 		return
 	}
+	conn.SetReadLimit(wsMaxMessageSize)
 
 	log.Printf("session-ws: client attached to session %s (mode=%s, remote=%s, revived=%v, oldScrollback=%d bytes)", sessionID, mode, r.RemoteAddr, revived, len(oldScrollback))
 
