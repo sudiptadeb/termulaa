@@ -19,7 +19,7 @@ usage() {
     echo "Components:"
     echo "  terminal-agent   Local terminal WebSocket agent (default)"
     echo ""
-    echo "Version defaults to 1.0.0"
+    echo "Version defaults to 0.1.0"
     echo ""
     echo "Output: dist/<os>/<binary>-<arch>-v<version>"
     exit 0
@@ -31,7 +31,7 @@ fi
 
 # Parse args: first arg is component (or version if numeric), second is version
 COMPONENT="terminal-agent"
-VERSION="1.0.0"
+VERSION="0.1.0"
 
 if [ -n "$1" ]; then
     if [[ "$1" =~ ^[0-9]+\.[0-9]+ ]]; then

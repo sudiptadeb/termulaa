@@ -15,7 +15,7 @@ Persistent PTY sessions that survive tab close, tabs with binary pane
 splits, scrollback replay on reconnect, per-session CWD tracking. Single
 small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
 
-![termulaa split pane — project tree and a dev server side by side](docs/images/hero.png)
+![termulaa split pane — project tree and a dev server side by side](resources/images/hero.png)
 
 ## Install
 
@@ -47,7 +47,7 @@ and drop it somewhere on your `PATH`.
 git clone https://github.com/sudiptadeb/termulaa
 cd termulaa
 build/build.sh              # cross-compiles to dist/<os>/
-./dist/darwin/terminal-agent-arm64-v1.0.0
+./dist/darwin/terminal-agent-arm64-v0.1.0
 ```
 
 ## Run
@@ -84,7 +84,7 @@ browser tab you leave open next to whatever you're building.
   tab. `Cmd/Ctrl+D` splits vertically, `Cmd/Ctrl+Shift+D` splits
   horizontally.
 
-  ![splitting a pane](docs/images/split-demo.gif)
+  ![splitting a pane](resources/images/split-demo.gif)
 
 - **Dead-session revival** — if the PTY exited, the on-disk scrollback
   replays and a new shell spawns in the last-known cwd.
