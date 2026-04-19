@@ -1,47 +1,96 @@
 # termulaa
 
-A small, local HTTP + WebSocket server that spawns PTY sessions and renders
-them in your browser via xterm.js. Tabs, binary pane splits, persistent
-sessions that survive tab close, scrollback replay on reconnect, per-session
-CWD tracking.
+[![build](https://github.com/sudiptadeb/termulaa/actions/workflows/build.yml/badge.svg)](https://github.com/sudiptadeb/termulaa/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/sudiptadeb/termulaa?sort=semver)](https://github.com/sudiptadeb/termulaa/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![go.mod](https://img.shields.io/github/go-mod/go-version/sudiptadeb/termulaa?filename=src/go.mod)](src/go.mod)
 
-**Single-user. Loopback-only. Personal developer tool.** See
-[SECURITY.md](SECURITY.md) for the threat model.
+**Put your terminal — and your coding agents — in a browser tab, right
+next to the webapp they're working on.** Live reload in one tab, Claude
+Code / Codex / OpenCode in the next. If your browser has workspaces or
+tab groups, group the terminals with the project they belong to and
+switch between projects cleanly.
 
-## Quick start
+Persistent PTY sessions that survive tab close, tabs with binary pane
+splits, scrollback replay on reconnect, per-session CWD tracking. Single
+small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
+
+<!-- Drop a screenshot or demo GIF here. Suggested framing:
+     left half = your webapp with DevTools open,
+     right half = termulaa with a coding agent mid-edit. -->
+
+## Install
+
+### `go install` (recommended if you have Go)
 
 ```bash
-# Build (cross-compiles to dist/<os>/<binary>-<arch>-v<version>)
-build/build.sh
-
-# Run (macOS arm64 example)
-./dist/darwin/terminal-agent-arm64-v1.0.0
-
-# Open
-open http://127.0.0.1:17380/
+go install github.com/sudiptadeb/termulaa/src/cmd/terminal-agent@latest
+terminal-agent
 ```
 
-Or via the helper:
+### One-liner (downloads the latest release binary)
 
 ```bash
-bash resources/scripts/run-terminal-agent.sh
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh | bash
+```
+
+Detects OS (linux/darwin) and arch (amd64/arm64), installs to
+`~/.local/bin/termulaa`.
+
+### Manual
+
+Grab the binary for your platform from the
+[Releases page](https://github.com/sudiptadeb/termulaa/releases/latest)
+and drop it somewhere on your `PATH`.
+
+### From source
+
+```bash
+git clone https://github.com/sudiptadeb/termulaa
+cd termulaa
+build/build.sh              # cross-compiles to dist/<os>/
+./dist/darwin/terminal-agent-arm64-v1.0.0
+```
+
+## Run
+
+```bash
+termulaa                     # or terminal-agent, depending on install path
+```
+
+Then open <http://127.0.0.1:17380/> in your browser.
+
+Change the port with `-port 17381`, or edit settings at
+`http://127.0.0.1:17380/settings`.
+
+### macOS Gatekeeper
+
+The release binaries aren't signed or notarized. On first run macOS will
+refuse to open them. Fix:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/termulaa
 ```
 
 ## Why
 
-`ttyd` + `tmux` gets you "browser-rendered PTY with persistence," but with
-seams — reattaching doesn't replay scrollback cleanly, layout lives in tmux,
-and `ttyd` has no tab/pane concept of its own. termulaa folds the pieces
-into one small binary:
+`ttyd` + `tmux` gets you "browser-rendered PTY with persistence," but
+with seams — reattaching doesn't replay scrollback cleanly, layout lives
+in tmux, and `ttyd` has no tab or pane concept of its own. termulaa
+folds the pieces into one small binary and aims it at one use case: a
+browser tab you leave open next to whatever you're building.
 
 - **Persistent sessions** — the PTY stays alive after the browser tab
   closes; reconnecting replays the scrollback ring buffer.
-- **Tabs + binary pane splits** — layout is first-class, persisted per tab.
-- **Dead-session revival** — if the PTY has exited, the on-disk scrollback
+- **Tabs + binary pane splits** — layout is first-class, persisted per
+  tab.
+- **Dead-session revival** — if the PTY exited, the on-disk scrollback
   replays and a new shell spawns in the last-known cwd.
 - **Per-session CWD tracking** — follows `/proc/<pid>/cwd` on Linux,
   `lsof -p` on macOS.
 - **Shell history** — per-session `HISTFILE`.
+- **Side-by-side with your work** — it's a browser tab, so workspaces
+  and tab groups work out of the box.
 
 ## Layout
 
@@ -67,24 +116,27 @@ build step.
   history/<id>.hist       # per-session shell HISTFILE
 ```
 
-Settings are editable in-app at `http://127.0.0.1:17380/settings` or via
-`GET/PUT /api/settings`.
+Settings are editable in-app at `/settings` or via `GET/PUT
+/api/settings`.
 
 ## Platform support
 
-Builds produced by `build/build.sh`:
+Builds produced by `build/build.sh` and the release workflow:
 
 - `darwin/amd64`, `darwin/arm64`
 - `linux/amd64`, `linux/arm64`
 
-Windows is not supported (PTY handling via `creack/pty` is POSIX-only).
+**Windows is not supported.** PTY handling via `creack/pty` is
+POSIX-only; Windows would need a ConPTY port. Tracked as an open issue.
 
 ## Security
 
-Loopback-only, no auth, wildcard CORS. Any page open in a browser on the
-same machine can attach to a PTY. Accepted for a single-user dev tool —
-see [SECURITY.md](SECURITY.md) for the full posture and what would need to
-change before exposing on a non-loopback interface.
+Loopback-only (`127.0.0.1`). Host-header allowlist and strict Origin
+checks on both HTTP and WebSocket. Any page open in a browser on the
+same machine can still talk to the server if it uses the right Host —
+accepted risk for a single-user dev tool. Full threat model and the
+controls required before exposing on a non-loopback interface are in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
