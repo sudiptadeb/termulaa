@@ -132,6 +132,10 @@ meaningful tests is always welcome (see issue #3).
 - Short imperative subject, lowercase. Prefixes when they clarify the
   category: `chore:`, `fix:`, `sec:`, `docs:`, `release:`.
 - Body explains *why*, not *what*. Reference issues when relevant.
+- Never add `Co-Authored-By`, `Generated-By`, model names, vendor names,
+  or assistant/tool attribution to commit subjects, bodies, trailers, PR
+  descriptions, or release notes. Git metadata should credit the human
+  maintainer only.
 - **Create new commits rather than amending.** Pre-commit hooks that
   fail do NOT commit, so `--amend` would modify a *different* commit.
 - Never `git push --force` to `main`. Tags push forward; branches don't
