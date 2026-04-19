@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build script for terminal-agent
+# Build script for termulaa
 #
 # Usage:
-#   ./build.sh                      # build terminal-agent (default)
-#   ./build.sh terminal-agent       # same as above
+#   ./build.sh                      # build termulaa (default)
+#   ./build.sh termulaa       # same as above
 #   ./build.sh 2.0.0                # build with version
-#   ./build.sh terminal-agent 2.0.0 # build with version
+#   ./build.sh termulaa 2.0.0 # build with version
 
 FAILED_BUILDS=()
 
@@ -17,7 +17,7 @@ usage() {
     echo "Usage: $(basename "$0") [component] [version]"
     echo ""
     echo "Components:"
-    echo "  terminal-agent   Local terminal WebSocket agent (default)"
+    echo "  termulaa   Local terminal WebSocket agent (default)"
     echo ""
     echo "Version defaults to 0.1.0"
     echo ""
@@ -30,7 +30,7 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
 fi
 
 # Parse args: first arg is component (or version if numeric), second is version
-COMPONENT="terminal-agent"
+COMPONENT="termulaa"
 VERSION="0.1.0"
 
 if [ -n "$1" ]; then
@@ -101,8 +101,8 @@ if [ -f "$README_FILE" ]; then
 fi
 
 case "$COMPONENT" in
-    terminal-agent)
-        build_all_platforms "terminal-agent" "./cmd/terminal-agent"
+    termulaa)
+        build_all_platforms "termulaa" "./cmd/termulaa"
         ;;
     *)
         echo "Unknown component: $COMPONENT"

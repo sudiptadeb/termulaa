@@ -48,7 +48,7 @@ Session {
 ## Persistence
 
 ```
-~/.terminal-agent/
+~/.termulaa/
   state.json              # tabs + session metadata (small, ~KB)
   scrollback/
     <sessionID>.raw       # raw terminal output per session (capped ~1MB each)
@@ -69,7 +69,7 @@ Raw bytes from PTY output, ring buffer capped at 1MB per session. Not JSON — j
 Poll `/proc/PID/cwd` (Linux) or `lsof -p PID -Fn` (macOS) every 5s per live session.
 
 ### Shell history per session
-Each session gets its own history file at `~/.terminal-agent/history/<sessionID>`. On session creation, the agent sets `HISTFILE=~/.terminal-agent/history/<sessionID>` in the shell's environment. This gives each pane independent up-arrow history. On revival, the same `HISTFILE` is set so history carries over across agent restarts.
+Each session gets its own history file at `~/.termulaa/history/<sessionID>`. On session creation, the agent sets `HISTFILE=~/.termulaa/history/<sessionID>` in the shell's environment. This gives each pane independent up-arrow history. On revival, the same `HISTFILE` is set so history carries over across agent restarts.
 
 ## Agent serves UI
 
@@ -125,7 +125,7 @@ Client → Server:  {"type":"file","name":"...","data":"<base64>"}
 ## Revival (after agent restart)
 
 When opening a tab with dead sessions:
-1. Load scrollback from `~/.terminal-agent/scrollback/<sessionID>.raw`
+1. Load scrollback from `~/.termulaa/scrollback/<sessionID>.raw`
 2. Start new shell in saved `cwd`
 3. Send scrollback to client first, then live PTY output
 4. User sees old output above the fresh prompt — seamless experience
@@ -133,7 +133,7 @@ When opening a tab with dead sessions:
 ## Go Package Structure
 
 ```
-src/cmd/terminal-agent/
+src/cmd/termulaa/
   main.go           # HTTP server, embed UI, signal handling, load/save state
   session.go        # Session struct, PTY lifecycle, scrollback buffer
   manager.go        # SessionManager: map[id]*Session, create/kill/revive
@@ -169,7 +169,7 @@ src/cmd/terminal-agent/
 
 ## Configuration
 
-Stored in `~/.terminal-agent/config.json`. Editable via settings page in UI.
+Stored in `~/.termulaa/config.json`. Editable via settings page in UI.
 
 ```json
 {

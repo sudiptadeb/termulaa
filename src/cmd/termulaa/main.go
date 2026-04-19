@@ -42,8 +42,8 @@ var Version = "dev"
 //go:embed ui
 var uiFS embed.FS
 
-// FullConfig holds all terminal-agent settings.
-// Persisted to ~/.terminal-agent/config.json.
+// FullConfig holds all termulaa settings.
+// Persisted to ~/.termulaa/config.json.
 type FullConfig struct {
 	Port             int    `json:"port"`
 	Shell            string `json:"shell"`
@@ -82,7 +82,7 @@ func defaultFullConfig() *FullConfig {
 
 func configPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".terminal-agent", "config.json")
+	return filepath.Join(home, ".termulaa", "config.json")
 }
 
 func loadFullConfig() *FullConfig {
@@ -174,7 +174,7 @@ func main() {
 		Handler: securityMiddleware(mux),
 	}
 
-	log.Printf("terminal-agent %s starting on http://%s", Version, addr)
+	log.Printf("termulaa %s starting on http://%s", Version, addr)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

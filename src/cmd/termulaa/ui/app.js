@@ -1,6 +1,6 @@
 // ignorei18n_start
 /**
- * app.js — Tab-ownership-aware split pane manager for terminal-agent v2.
+ * app.js — Tab-ownership-aware split pane manager for termulaa v2.
  *
  * Architecture:
  *   Browser → /ws/tab/<tabID>           (tab ownership WS — control channel)

@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Config holds the terminal-agent runtime configuration.
+// Config holds the termulaa runtime configuration.
 type Config struct {
 	Port             int
 	Shell            string
@@ -27,7 +27,7 @@ type Config struct {
 	SavePeriod       time.Duration
 }
 
-// stateFile is the JSON structure persisted to ~/.terminal-agent/state.json.
+// stateFile is the JSON structure persisted to ~/.termulaa/state.json.
 type stateFile struct {
 	Sessions map[string]*SessionMeta `json:"sessions"`
 	Tabs     map[string]*Tab         `json:"tabs"`
@@ -56,7 +56,7 @@ type SessionManager struct {
 // NewSessionManager creates a manager, initializes directories, and detects the shell.
 func NewSessionManager(cfg *Config) *SessionManager {
 	home, _ := os.UserHomeDir()
-	dataDir := filepath.Join(home, ".terminal-agent")
+	dataDir := filepath.Join(home, ".termulaa")
 
 	// Ensure data directories exist.
 	os.MkdirAll(filepath.Join(dataDir, "scrollback"), 0700)

@@ -21,7 +21,7 @@ jobs:
           cache-dependency-path: src/go.sum
 
       - name: Build all platforms
-        run: bash build/build.sh terminal-agent "${GITHUB_REF_NAME#v}"
+        run: bash build/build.sh termulaa "${GITHUB_REF_NAME#v}"
 
       - name: Rename release assets
         run: |
@@ -29,7 +29,7 @@ jobs:
           mkdir -p release
           for os in linux darwin; do
             for arch in amd64 arm64; do
-              src="dist/$os/terminal-agent-$arch-$tag"
+              src="dist/$os/termulaa-$arch-$tag"
               dst="release/termulaa-$os-$arch-$tag"
               cp "$src" "$dst"
             done

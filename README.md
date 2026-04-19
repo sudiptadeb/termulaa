@@ -22,8 +22,8 @@ small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
 ### `go install` (recommended if you have Go)
 
 ```bash
-go install github.com/sudiptadeb/termulaa/src/cmd/terminal-agent@latest
-terminal-agent
+go install github.com/sudiptadeb/termulaa/src/cmd/termulaa@latest
+termulaa
 ```
 
 ### One-liner (downloads the latest release binary)
@@ -47,13 +47,13 @@ and drop it somewhere on your `PATH`.
 git clone https://github.com/sudiptadeb/termulaa
 cd termulaa
 build/build.sh              # cross-compiles to dist/<os>/
-./dist/darwin/terminal-agent-arm64-v0.1.0
+./dist/darwin/termulaa-arm64-v0.1.0
 ```
 
 ## Run
 
 ```bash
-termulaa                     # or terminal-agent, depending on install path
+termulaa
 ```
 
 Then open <http://127.0.0.1:17380/> in your browser.
@@ -97,10 +97,11 @@ browser tab you leave open next to whatever you're building.
 ## Layout
 
 ```
-build/build.sh           # cross-compile to dist/<os>/
-src/cmd/terminal-agent/  # Go sources + embedded ui/
-resources/plans/         # design docs
-resources/scripts/       # run + benchmark helpers
+build/build.sh       # cross-compile to dist/<os>/
+src/cmd/termulaa/    # Go sources + embedded ui/
+resources/plans/     # design docs
+resources/scripts/   # run + benchmark helpers
+resources/images/    # README screenshots + GIFs
 ```
 
 Two Go dependencies: [`creack/pty`](https://github.com/creack/pty) and
@@ -111,7 +112,7 @@ build step.
 ## Runtime state
 
 ```
-~/.terminal-agent/
+~/.termulaa/
   config.json             # user settings (port, shell, scrollback size, ...)
   state.json              # tabs + session metadata
   scrollback/<id>.raw     # per-session raw PTY output (ring buffer)

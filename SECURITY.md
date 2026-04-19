@@ -23,7 +23,7 @@ personal machine.
 
 Changing the listener bind from `127.0.0.1` to `0.0.0.0` (or any LAN/VPN
 address) without also adding the controls below is a security incident. In
-`src/cmd/terminal-agent/main.go` the bind is pinned at `127.0.0.1:<port>`
+`src/cmd/termulaa/main.go` the bind is pinned at `127.0.0.1:<port>`
 and commented accordingly.
 
 ## What would need to change before exposing on a non-loopback interface
