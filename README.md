@@ -15,9 +15,7 @@ Persistent PTY sessions that survive tab close, tabs with binary pane
 splits, scrollback replay on reconnect, per-session CWD tracking. Single
 small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
 
-<!-- Drop a screenshot or demo GIF here. Suggested framing:
-     left half = your webapp with DevTools open,
-     right half = termulaa with a coding agent mid-edit. -->
+![termulaa split pane — project tree and a dev server side by side](docs/images/hero.png)
 
 ## Install
 
@@ -83,7 +81,11 @@ browser tab you leave open next to whatever you're building.
 - **Persistent sessions** — the PTY stays alive after the browser tab
   closes; reconnecting replays the scrollback ring buffer.
 - **Tabs + binary pane splits** — layout is first-class, persisted per
-  tab.
+  tab. `Cmd/Ctrl+D` splits vertically, `Cmd/Ctrl+Shift+D` splits
+  horizontally.
+
+  ![splitting a pane](docs/images/split-demo.gif)
+
 - **Dead-session revival** — if the PTY exited, the on-disk scrollback
   replays and a new shell spawns in the last-known cwd.
 - **Per-session CWD tracking** — follows `/proc/<pid>/cwd` on Linux,
