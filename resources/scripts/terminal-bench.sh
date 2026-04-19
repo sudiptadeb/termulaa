@@ -3,7 +3,7 @@
 #
 # Run this script in BOTH terminals to compare:
 #   1. Open iTerm2 → run this script
-#   2. Open Ulaa Terminal (browser) → run this script
+#   2. Open termulaa (browser) → run this script
 #   3. Compare the numbers
 #
 # Usage:

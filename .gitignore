@@ -1,5 +1,17 @@
-.idea
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS cruft
 .DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Agent/tooling local state
 .claude/
 .agents/
 
@@ -12,3 +24,17 @@ dist/
 # Runtime logs
 *.log
 nohup.out
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+.envrc
+
+# Go build / test / profile artifacts
+*.test
+*.out
+coverage.*
+*.prof
+*.pprof
+__debug_bin*
