@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>termulaa social preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap');
+
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 1280px;
+    height: 640px;
+    background: #0b0f14;
+    color: #e6edf3;
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    overflow: hidden;
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  body::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(1100px 680px at 85% 110%, rgba(59,130,246,0.16), transparent 60%),
+      radial-gradient(1000px 560px at 10% -10%, rgba(147,197,253,0.08), transparent 60%),
+      linear-gradient(180deg, #0b0f14 0%, #080b10 100%);
+  }
+  body::after {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0.9), rgba(0,0,0,0) 70%);
+  }
+
+  .wrap {
+    position: relative; z-index: 1;
+    padding: 88px 96px;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+
+  .top {
+    display: flex; align-items: center; gap: 16px;
+    color: #93c5fd;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #3b82f6; box-shadow: 0 0 20px rgba(59,130,246,0.55); }
+
+  .main {
+    display: flex; flex-direction: column; gap: 28px;
+  }
+
+  h1 {
+    margin: 0;
+    font-weight: 800;
+    font-size: 148px;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: #ffffff;
+  }
+  h1 .prompt { color: #3b82f6; }
+
+  .tagline {
+    margin: 0;
+    font-size: 32px;
+    line-height: 1.35;
+    font-weight: 400;
+    color: #cbd5e1;
+    max-width: 1100px;
+  }
+  .tagline strong { color: #ffffff; font-weight: 600; }
+
+  .bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 40px;
+    font-size: 20px;
+    color: #94a3b8;
+    font-weight: 500;
+  }
+  .bottom .left  { color: #cbd5e1; }
+  .bottom .right { color: #64748b; letter-spacing: 0.02em; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="dot"></div>
+      <div>github.com/sudiptadeb/termulaa</div>
+    </div>
+
+    <div class="main">
+      <h1><span class="prompt">$</span> termulaa</h1>
+      <p class="tagline">
+        <strong>Your terminal — and your coding agents — in a browser tab,</strong><br>
+        right next to the webapp they're working on.
+      </p>
+    </div>
+
+    <div class="bottom">
+      <div class="left">persistent panes · tab&nbsp;groups · loopback-only</div>
+      <div class="right">one small Go binary</div>
+    </div>
+  </div>
+</body>
+</html>
