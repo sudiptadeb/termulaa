@@ -15,7 +15,7 @@ Persistent PTY sessions that survive tab close, tabs with binary pane
 splits, scrollback replay on reconnect, per-session CWD tracking. Single
 small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
 
-![termulaa split pane — project tree and a dev server side by side](resources/images/hero.png)
+![termulaa — a coding agent and a streaming log in a single split terminal](resources/images/hero-real.png)
 
 ## Install
 
@@ -79,20 +79,23 @@ folds the pieces into one small binary and aims it at one use case: a
 browser tab you leave open next to whatever you're building.
 
 - **Persistent sessions** — the PTY stays alive after the browser tab
-  closes; reconnecting replays the scrollback ring buffer.
+  closes; reopening the tab replays the scrollback ring buffer.
+
+  ![reopening a persistent session](resources/images/persistence.gif)
+
 - **Tabs + binary pane splits** — layout is first-class, persisted per
   tab. `Cmd/Ctrl+D` splits vertically, `Cmd/Ctrl+Shift+D` splits
   horizontally.
-
-  ![splitting a pane](resources/images/split-demo.gif)
-
 - **Dead-session revival** — if the PTY exited, the on-disk scrollback
   replays and a new shell spawns in the last-known cwd.
 - **Per-session CWD tracking** — follows `/proc/<pid>/cwd` on Linux,
   `lsof -p` on macOS.
 - **Shell history** — per-session `HISTFILE`.
 - **Side-by-side with your work** — it's a browser tab, so workspaces
-  and tab groups work out of the box.
+  and tab groups work out of the box. Flip between projects by flipping
+  workspaces; each one keeps its own termulaa tab.
+
+  ![switching browser workspaces, each with its own termulaa tab](resources/images/workspaces.gif)
 
 ## Layout
 
