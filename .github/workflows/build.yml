@@ -20,6 +20,16 @@ jobs:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
 
+      - name: gofmt
+        working-directory: src
+        run: |
+          diff=$(gofmt -l .)
+          if [ -n "$diff" ]; then
+            echo "gofmt needed on:"
+            echo "$diff"
+            exit 1
+          fi
+
       - name: go vet
         working-directory: src
         run: go vet ./...

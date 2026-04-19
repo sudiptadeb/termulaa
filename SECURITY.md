@@ -38,6 +38,10 @@ Until all five are in place, keep the loopback bind.
 
 ## Reporting a vulnerability
 
-This is a personal project and has no paid security team. If you find a
-vulnerability, please open a GitHub issue, or email the maintainer directly
-if the issue is sensitive. I will respond on a best-effort basis.
+This is a personal project and has no paid security team. Best-effort
+response only.
+
+- **Non-sensitive issues** — open a GitHub issue.
+- **Sensitive issues** (e.g. a working exploit) — use GitHub's
+  [private vulnerability reporting](https://github.com/sudiptadeb/termulaa/security/advisories/new),
+  or email <mr.sudiptadeb@gmail.com>.
