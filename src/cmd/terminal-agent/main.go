@@ -1,25 +1,23 @@
-// Package main implements terminal-agent, a personal developer tool.
+// Package main implements termulaa, a personal developer tool.
 //
 // SECURITY POSTURE — do not relax without explicit approval:
 //
-//   - Local-only. Never bundled with gateway, app-connector, mesh, or any
-//     artifact shipped to users. Single-user. Runs on one developer's
-//     machine. `build/build.sh terminal-agent` produces a standalone
-//     binary; the gateway does not embed or depend on it.
+//   - Local-only, single-user. Runs on one developer's machine and is
+//     never meant to ship to end users or run on a non-loopback
+//     interface.
 //   - HTTP listener binds to 127.0.0.1 ONLY (see main() below). Do not
-//     change to 0.0.0.0 or any non-loopback address. The port is never
-//     reachable from LAN, WireGuard, SASE tunnel, or any remote host.
+//     change to 0.0.0.0 or any non-loopback address. The port must
+//     never be reachable from LAN, VPN, or any remote host.
 //   - No per-request auth, wildcard CORS, and CheckOrigin returns true
 //     on the WebSocket upgrader (see handler.go). This is acceptable
-//     *only* because the port is loopback-only, but it does mean any
-//     webpage opened in a browser on the same machine can call the API
-//     and attach to a PTY. Known, accepted risk for a single-user dev
-//     tool.
-//   - If this ever needs to ship to users or run on a non-loopback
-//     interface, it MUST first add real per-request auth (bearer secret
-//     or OS-local credential), a locked-down CORS policy, and a strict
-//     origin check on the WebSocket upgrader. Until then, relaxing the
-//     localhost bind is a security incident.
+//     *only* because the port is loopback-only — any webpage opened in
+//     a browser on the same machine can call the API and attach to a
+//     PTY. Known, accepted risk for a single-user dev tool.
+//   - If this ever needs to run on a non-loopback interface, it MUST
+//     first add real per-request auth (bearer secret or OS-local
+//     credential), a locked-down CORS policy, and a strict origin check
+//     on the WebSocket upgrader. Until then, relaxing the localhost
+//     bind is a security incident.
 package main
 
 import (
