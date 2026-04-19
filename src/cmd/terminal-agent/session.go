@@ -401,7 +401,7 @@ func (s *Session) HandleFileDrop(name, dataB64 string) (string, error) {
 	filename := fmt.Sprintf("%s-%d%s", baseName, time.Now().UnixMilli(), ext)
 	path := filepath.Join(os.TempDir(), filename)
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 

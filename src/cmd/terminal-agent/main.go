@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -154,9 +155,10 @@ func main() {
 	// Loopback-only bind. Non-negotiable — see the package doc at the top
 	// of this file. Changing this is a security incident, not a config tweak.
 	addr := fmt.Sprintf("127.0.0.1:%d", fullCfg.Port)
+	initSecurity(fullCfg.Port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: corsMiddleware(mux),
+		Handler: securityMiddleware(mux),
 	}
 
 	log.Printf("terminal-agent %s starting on http://%s", Version, addr)
@@ -183,11 +185,70 @@ func main() {
 	log.Println("Server stopped")
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+// allowedHosts and allowedOrigins are populated by initSecurity() from
+// the configured port. They back the Host-header and Origin-header checks
+// used by both the HTTP middleware and the WebSocket upgrader.
+var (
+	allowedHosts   map[string]bool
+	allowedOrigins map[string]bool
+	idPattern      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+)
+
+func initSecurity(port int) {
+	allowedHosts = map[string]bool{
+		fmt.Sprintf("127.0.0.1:%d", port): true,
+		fmt.Sprintf("localhost:%d", port): true,
+		fmt.Sprintf("[::1]:%d", port):     true,
+	}
+	allowedOrigins = map[string]bool{
+		fmt.Sprintf("http://127.0.0.1:%d", port): true,
+		fmt.Sprintf("http://localhost:%d", port): true,
+		fmt.Sprintf("http://[::1]:%d", port):     true,
+	}
+}
+
+func isOriginAllowed(origin string) bool {
+	return origin == "" || allowedOrigins[origin]
+}
+
+func isValidID(s string) bool {
+	return idPattern.MatchString(s)
+}
+
+// securityMiddleware enforces loopback-only safety on every HTTP request.
+// Layered defenses, all cheap:
+//   - Host-header allowlist → blocks DNS-rebinding attacks against the
+//     loopback service (the classic browser-side attack on localhost
+//     daemons). A mismatching Host returns 421 Misdirected Request.
+//   - Origin-header allowlist → blocks cross-origin browsers from calling
+//     the API. Non-browser clients that omit Origin are allowed.
+//   - Base security headers (X-Frame-Options, nosniff, Referrer-Policy).
+//   - CORS headers echoed only for allowed origins (no wildcard).
+func securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+		if !allowedHosts[r.Host] {
+			http.Error(w, "invalid host", http.StatusMisdirectedRequest)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		if !isOriginAllowed(origin) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
