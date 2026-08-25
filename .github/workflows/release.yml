@@ -3,6 +3,15 @@ name: release
 on:
   push:
     tags: ['v*']
+  # Cutting a release by pushing a tag needs a local checkout and push rights
+  # for refs/tags. Dispatching does the same work from the Actions tab, and
+  # creates the tag at the built commit, so a release never depends on who can
+  # push a tag from where.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, including the leading v (e.g. v0.2.1)'
+        required: true
 
 permissions:
   contents: write  # required to create releases + upload assets
@@ -20,18 +29,30 @@ jobs:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
 
+      - name: Resolve tag
+        id: rel
+        run: |
+          tag="${{ inputs.version || github.ref_name }}"
+          case "$tag" in
+            v*) ;;
+            *) echo "version must start with v, got: $tag" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "releasing $tag"
+
       - name: Build all platforms
-        run: bash build/build.sh termulaa "${GITHUB_REF_NAME#v}"
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: bash build/build.sh termulaa "${TAG#v}"
 
       - name: Rename release assets
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
           mkdir -p release
           for os in linux darwin; do
             for arch in amd64 arm64; do
-              src="dist/$os/termulaa-$arch-$tag"
-              dst="release/termulaa-$os-$arch-$tag"
-              cp "$src" "$dst"
+              cp "dist/$os/termulaa-$arch-$TAG" "release/termulaa-$os-$arch-$TAG"
             done
           done
           ls -la release/
@@ -39,9 +60,12 @@ jobs:
       - name: Create release and upload binaries
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          gh release create "$tag" \
-            --title "$tag" \
+          # --target creates the tag at this commit when dispatched; on a tag
+          # push it already exists and points here anyway.
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "$TAG" \
             --generate-notes \
             release/*
