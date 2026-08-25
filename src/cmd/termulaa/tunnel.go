@@ -8,7 +8,9 @@ package main
 import (
 	"bufio"
 	"context"
+	crand "crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,6 +53,11 @@ const (
 	tunnelPath        = "/rc/tunnel"
 	pairPath          = "/rc"
 	spliceCopyBufSize = 32 * 1024
+
+	// supersededCloseReason is the machine-readable reason in the rendezvous's
+	// close frame (code 1008) when another agent took over this token — a
+	// terminal signal, per the rc protocol (§8).
+	supersededCloseReason = "superseded"
 )
 
 // TunnelConfig is the runtime configuration for the rc agent.
@@ -59,6 +67,7 @@ type TunnelConfig struct {
 	Token    string // tunnel token (overrides the saved one when set)
 	Label    string // agent label shown on the rendezvous (default: hostname)
 	Tunnels  int    // pool size: number of concurrent smux tunnels
+	Takeover bool   // disconnect another live agent holding this token
 	Insecure *bool  // skip TLS verification (dev only); nil = use saved value
 }
 
@@ -184,6 +193,11 @@ func runTunnelAgent(cfg TunnelConfig) error {
 
 	dialer := rcDialer(st.Insecure)
 	status := &poolStatus{total: cfg.Tunnels}
+	// One random instance id per PROCESS, shared by every tunnel in the pool.
+	// It is how the rendezvous tells "this agent reconnecting" from "another
+	// agent with the same token" (rc protocol §8); a fresh process gets a
+	// fresh id, so a killed agent's restart never collides with its corpse.
+	instance := newInstanceID()
 
 	var wg sync.WaitGroup
 	for i := 0; i < cfg.Tunnels; i++ {
@@ -191,14 +205,16 @@ func runTunnelAgent(cfg TunnelConfig) error {
 		go func(idx int) {
 			defer wg.Done()
 			runTunnel(ctx, fail, tunnelParams{
-				dialer: dialer,
-				server: st.Server,
-				token:  st.Token,
-				label:  cfg.Label,
-				port:   port,
-				target: cfg.Target,
-				index:  idx,
-				status: status,
+				dialer:   dialer,
+				server:   st.Server,
+				token:    st.Token,
+				label:    cfg.Label,
+				port:     port,
+				target:   cfg.Target,
+				index:    idx,
+				instance: instance,
+				takeover: cfg.Takeover,
+				status:   status,
 			})
 		}(i)
 	}
@@ -212,14 +228,27 @@ func runTunnelAgent(cfg TunnelConfig) error {
 }
 
 type tunnelParams struct {
-	dialer *websocket.Dialer
-	server string
-	token  string
-	label  string
-	port   string
-	target string
-	index  int
-	status *poolStatus
+	dialer   *websocket.Dialer
+	server   string
+	token    string
+	label    string
+	port     string
+	target   string
+	index    int
+	instance string
+	takeover bool
+	status   *poolStatus
+}
+
+// newInstanceID returns the process's random, unguessable agent-instance id.
+// Never derived from the token or the host: a restarted process must present
+// a brand-new identity.
+func newInstanceID() string {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		panic("rc: crypto/rand unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // poolStatus tracks live tunnels so logs always show pool health at a glance.
@@ -250,8 +279,41 @@ type authError struct{ status string }
 
 func (e *authError) Error() string { return "rendezvous rejected the token: " + e.status }
 
+// conflictError marks a terminal handshake refusal: another agent is already
+// connected with this token (do not retry, do not disturb it).
+type conflictError struct {
+	label   string
+	tunnels int
+	age     time.Duration
+}
+
+func (e *conflictError) Error() string {
+	who := "another agent"
+	if e.label != "" {
+		who = fmt.Sprintf("%q (%d tunnels, up %s)", e.label, e.tunnels, formatAge(e.age))
+	}
+	return "another agent is already connected with this token: " + who
+}
+
+// errSuperseded marks the terminal close signal sent when another agent took
+// over this token (do not retry).
+var errSuperseded = errors.New("another agent connected with this token and took over")
+
+func formatAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
 // runTunnel keeps one pooled tunnel alive, reconnecting with jittered
-// exponential backoff. An auth failure fails the whole agent via fail().
+// exponential backoff. Terminal conditions — auth failure, a conflict with
+// another live agent, being superseded by one — fail the whole agent via
+// fail(): every tunnel stops, nothing keeps retrying in the background.
 func runTunnel(ctx context.Context, fail context.CancelCauseFunc, p tunnelParams) {
 	backoff := initialBackoff
 	for ctx.Err() == nil {
@@ -264,6 +326,17 @@ func runTunnel(ctx context.Context, fail context.CancelCauseFunc, p tunnelParams
 		if errors.As(err, &ae) {
 			fail(fmt.Errorf("%v\n     the token may be expired — mint a fresh one at %s%s",
 				ae, strings.TrimRight(p.server, "/"), pairPath))
+			return
+		}
+		var ce *conflictError
+		if errors.As(err, &ce) {
+			fail(fmt.Errorf("%v\n     it may be a stray `termulaa -rc` in another shell, a service unit, or another machine\n     stop that agent first, or re-run with -rc-takeover to disconnect it,\n     or mint a separate token for this agent at %s%s",
+				ce, strings.TrimRight(p.server, "/"), pairPath))
+			return
+		}
+		if errors.Is(err, errSuperseded) {
+			fail(fmt.Errorf("disconnected: %v\n     if that was not you, mint a fresh token for this agent at %s%s",
+				err, strings.TrimRight(p.server, "/"), pairPath))
 			return
 		}
 		if time.Since(start) >= stableConnAge {
@@ -295,11 +368,16 @@ func jitter(d time.Duration) time.Duration {
 }
 
 func dialAndServeTunnel(ctx context.Context, p tunnelParams) error {
-	u, err := wsURL(p.server, tunnelPath, url.Values{
-		"agent":   {p.label},
-		"session": {strconv.Itoa(p.index)},
-		"port":    {p.port},
-	})
+	q := url.Values{
+		"agent":    {p.label},
+		"session":  {strconv.Itoa(p.index)},
+		"port":     {p.port},
+		"instance": {p.instance},
+	}
+	if p.takeover {
+		q.Set("takeover", "1")
+	}
+	u, err := wsURL(p.server, tunnelPath, q)
 	if err != nil {
 		return err
 	}
@@ -309,6 +387,9 @@ func dialAndServeTunnel(ctx context.Context, p tunnelParams) error {
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 			return &authError{status: resp.Status}
 		}
+		if resp != nil && resp.StatusCode == http.StatusConflict {
+			return parseConflict(resp)
+		}
 		return err
 	}
 	p.status.up(p.index)
@@ -317,9 +398,40 @@ func dialAndServeTunnel(ctx context.Context, p tunnelParams) error {
 	return err
 }
 
+// parseConflict reads the rendezvous's 409 body describing the live agent
+// that already holds the token. The dialer surfaces the first KB of a failed
+// handshake's body, which is more than the small JSON object needs; a body
+// that does not parse still yields a terminal conflictError.
+func parseConflict(resp *http.Response) *conflictError {
+	var body struct {
+		Label         string `json:"label"`
+		Tunnels       int    `json:"tunnels"`
+		ConnectedSecs int64  `json:"connected_secs"`
+	}
+	if resp.Body != nil {
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+	}
+	return &conflictError{
+		label:   body.Label,
+		tunnels: body.Tunnels,
+		age:     time.Duration(body.ConnectedSecs) * time.Second,
+	}
+}
+
 // serveTunnel runs one smux tunnel over an established WebSocket: accept
 // streams, splice each to the local termulaa. Blocks until the tunnel dies.
+// A close frame carrying the SUPERSEDED signal is surfaced as errSuperseded;
+// smux swallows the close code, so it is captured at the WebSocket layer.
 func serveTunnel(ctx context.Context, ws *websocket.Conn, target string) error {
+	var superseded atomic.Bool
+	echoClose := ws.CloseHandler()
+	ws.SetCloseHandler(func(code int, text string) error {
+		if code == websocket.ClosePolicyViolation && text == supersededCloseReason {
+			superseded.Store(true)
+		}
+		return echoClose(code, text)
+	})
+
 	conn := newWSConn(ws)
 	defer conn.Close()
 
@@ -342,6 +454,9 @@ func serveTunnel(ctx context.Context, ws *websocket.Conn, target string) error {
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
+			if superseded.Load() {
+				return errSuperseded
+			}
 			return err
 		}
 		go serveStream(stream, target)

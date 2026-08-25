@@ -135,6 +135,7 @@ func main() {
 	rcToken := flag.String("rc-token", "", "tunnel token for -rc (default from ~/.termulaa/rc.json; prompts if unset)")
 	rcLabel := flag.String("rc-label", "", "agent label shown on the rendezvous for -rc (default: hostname)")
 	rcTunnels := flag.Int("rc-tunnels", 0, "pooled tunnel connections for -rc, 1-8 (default 4)")
+	rcTakeover := flag.Bool("rc-takeover", false, "for -rc: disconnect another agent currently connected with this token (default: refuse and exit)")
 	rcInsecure := flag.Bool("rc-insecure", false, "skip TLS verification for -rc dials (dev only; persisted to ~/.termulaa/rc.json)")
 	flag.Parse()
 
@@ -156,6 +157,7 @@ func main() {
 			Token:    *rcToken,
 			Label:    *rcLabel,
 			Tunnels:  *rcTunnels,
+			Takeover: *rcTakeover,
 			Insecure: insecure,
 		}); err != nil {
 			log.Fatalf("rc: %v", err)

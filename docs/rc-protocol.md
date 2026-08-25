@@ -73,6 +73,8 @@ Query parameters sent by the agent:
 | `agent` | human-readable label for display (default: the machine's hostname) |
 | `session` | 0-based index of this tunnel within the agent's pool |
 | `port` | the local TCP port the agent splices streams to — the server MUST use it for header rewriting (section 6) |
+| `instance` | the agent's per-process instance id (section 8.1). Generated ONCE per process from a cryptographically random source and sent identically on every tunnel of the pool. It MUST NOT be derived from the token, hostname, or anything else stable across restarts — a restarted process must present a brand-new id. 1–64 characters from `[A-Za-z0-9._-]`; the reference agent sends 32 lowercase hex characters (128 random bits). |
+| `takeover` | `1` to displace a live incumbent instance holding the same token (section 8.2). Omitted otherwise; the agent sends it only on explicit operator request (`-rc-takeover`). |
 
 ## 3. Framing: WebSocket as a byte pipe
 
@@ -223,14 +225,107 @@ retire themselves; the agent's re-pair message points users at
 Servers SHOULD never log full tokens (log a hash prefix instead), and
 the agent does the same.
 
-## 8. Reconnection
+## 8. Reconnection, instance identity, and conflicts
 
 The agent maintains its pool of tunnels independently: each tunnel
 reconnects on failure with exponential backoff (1s doubling to a 30s
 cap, reset after a connection that stayed up), randomized with jitter so
 pool members do not reconnect in lockstep after a server restart. The
-server MUST tolerate tunnels coming and going and treat each `(token,
-session)` registration as replacing any stale predecessor.
+server MUST tolerate tunnels coming and going.
+
+Replacement of stale tunnels is scoped by **agent instance**, not by
+token alone. A bare replace-by-`(token, session)` rule cannot tell an
+agent reconnecting from a *different process* using the same token; two
+such processes would evict each other's slots forever, each reconnect
+displacing the other — a mutual-eviction livelock in which neither pool
+ever stabilizes. The rules below exist to make that impossible.
+
+### 8.1 Agent instance identity
+
+Every agent process generates one random, unguessable **instance id**
+(see the `instance` parameter, section 2) and presents it on every
+tunnel handshake. All tunnels of one process share the id; a restarted
+process has a new one. The server keys each token's pool by
+`(instance, session)` and evaluates every registration as follows,
+**in order**:
+
+1. **Reap first.** The server MUST drop dead tunnels from the pool
+   before deciding anything. A registration MUST NOT be refused because
+   of tunnels whose connections are already dead — otherwise killing and
+   restarting an agent would lock the user out of their own token. A
+   server SHOULD detect carrier death promptly (a closed TCP connection
+   is immediate; only a true network partition may take until the smux
+   keepalive timeout, at most 30s).
+2. **Same instance.** The registration is the reconnect path: it MUST
+   replace any stale predecessor in the same `session` slot (closing it
+   immediately) and joins the pool alongside the instance's other slots.
+3. **Different instance, live incumbent, no `takeover`.** The server
+   MUST refuse the handshake with HTTP `409` and MUST NOT disturb the
+   incumbent in any way. The `409` body is a JSON object describing the
+   incumbent so the user can identify their own stray process:
+
+   ```json
+   {
+     "error": "conflict",
+     "label": "handyman",
+     "tunnels": 4,
+     "connected_at": "2026-08-25T11:02:41Z",
+     "connected_secs": 720
+   }
+   ```
+
+   `label` is the incumbent's `agent` label, `tunnels` its live tunnel
+   count, `connected_at`/`connected_secs` when its earliest live tunnel
+   registered (the seconds form spares the agent clock-skew math). The
+   body SHOULD stay under 1 KB (clients may only surface a handshake
+   body prefix). The agent MUST treat `409` as **terminal**: stop every
+   tunnel in the pool, do not retry, and tell the user who holds the
+   token and what to do (stop that agent, re-run with the takeover
+   flag, or mint a separate token at `<server>/rc`).
+4. **Different instance, live incumbent, `takeover=1`.** The newcomer
+   wins. The server MUST displace the incumbent instance's **entire**
+   pool — every tunnel, not just the colliding slot, or the loser keeps
+   a partial pool thrashing — and MUST send each displaced tunnel the
+   SUPERSEDED close signal (section 8.2) before tearing its carrier
+   down.
+
+If a registration lands against a live different-instance pool without
+having been refused (two processes racing through the conflict check
+simultaneously), the server resolves it as rule 4: the latest
+registration takes the pool and the displaced instance is superseded.
+Combined with the terminal handling below, any collision converges to
+exactly one live instance instead of oscillating.
+
+### 8.2 The SUPERSEDED close signal
+
+Merely closing a displaced tunnel's carrier is indistinguishable from a
+network drop (WebSocket close code 1006), which the loser would retry —
+recreating the livelock. A displacing server therefore MUST first send
+a WebSocket close frame with:
+
+- close code **1008** (policy violation),
+- reason exactly the string **`superseded`** (machine-readable; MUST
+  NOT change).
+
+An agent receiving this close on any tunnel MUST treat it as terminal
+for the **whole process**: stop all tunnels, do not reconnect, exit
+non-zero, and tell the user that another agent took over this token and
+that a separate token per agent can be minted at `<server>/rc`.
+
+### 8.3 Legacy agents (no `instance`)
+
+An agent predating the `instance` parameter sends none; the server
+treats the missing value as the shared **legacy identity** (the empty
+string) rather than rejecting it. Two legacy agents therefore share one
+identity and keep the historical replace-by-`session`-slot behavior,
+including its livelock flaw — indistinguishable by design, since they
+offer nothing to distinguish. Between the legacy identity and any real
+instance the rules of 8.1 apply unchanged: a legacy newcomer against a
+live instance-bearing incumbent is refused with `409` (the old agent
+retries with backoff — noisy, but it can never evict the incumbent),
+and an instance-bearing agent may take over a live legacy pool with
+`takeover=1` (the displaced legacy agent does not understand SUPERSEDED
+and will retry into `409` backoff until upgraded or stopped).
 
 **Revocation of a token that is already connected.** Only a handshake
 `401`/`403` stops the agent. A server that revokes a live token closes
