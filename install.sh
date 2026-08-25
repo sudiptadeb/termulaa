@@ -72,27 +72,42 @@ case "$arch_raw" in
 esac
 
 # ── Resolve release ──────────────────────────────────────────────────────────
-api="https://api.github.com/repos/$REPO/releases"
-if [ "$VERSION" = "latest" ]; then
-    api="$api/latest"
-else
-    api="$api/tags/$VERSION"
-fi
+# Deliberately does NOT use api.github.com: unauthenticated it allows 60
+# requests/hour per IP, and its 403 carries no body, so a plain `curl -fs`
+# under `set -e` exits with no output at all. github.com's redirect needs no
+# token, is not rate limited, and gives us the tag directly.
+resolve_latest_tag() {
+    curl -sSI -m 30 "https://github.com/$REPO/releases/latest" 2>/dev/null \
+        | tr -d '\r' \
+        | awk 'tolower($1) == "location:" { print $2 }' \
+        | sed -n 's#.*/releases/tag/##p' \
+        | tail -1
+}
 
 echo "→ Resolving release ($VERSION)..."
-release_json=$(curl -fsSL "$api")
+if [ "$VERSION" = "latest" ]; then
+    tag=$(resolve_latest_tag) || true
+    if [ -z "${tag:-}" ]; then
+        echo "Could not resolve the latest release of $REPO." >&2
+        echo "  Check https://github.com/$REPO/releases and retry, or pin one:" >&2
+        echo "    VERSION=v0.2.0 $0" >&2
+        echo "  If you are offline or behind a proxy, download the binary for your" >&2
+        echo "  platform from that page and copy it to $INSTALL_DIR/termulaa." >&2
+        exit 1
+    fi
+else
+    tag="$VERSION"
+fi
 
-# Pull the matching asset URL. Release assets look like
-# termulaa-<os>-<arch>-v<version>.
-pattern="termulaa-${os}-${arch}-v"
-url=$(printf '%s' "$release_json" \
-    | grep -o "\"browser_download_url\": *\"[^\"]*\"" \
-    | grep "$pattern" \
-    | head -1 \
-    | sed -E 's/.*"(https:[^"]+)".*/\1/')
+# Asset names are fully determined by the tag, so no API lookup is needed.
+asset="termulaa-${os}-${arch}-${tag}"
+url="https://github.com/$REPO/releases/download/$tag/$asset"
 
-if [ -z "$url" ]; then
-    echo "No matching binary found for $os/$arch in $VERSION" >&2
+code=$(curl -sSL -o /dev/null -w '%{http_code}' -m 60 "$url" 2>/dev/null || echo 000)
+if [ "$code" != "200" ]; then
+    echo "No binary for $os/$arch in $tag (HTTP $code)." >&2
+    echo "  Looked for: $asset" >&2
+    echo "  Available assets: https://github.com/$REPO/releases/tag/$tag" >&2
     exit 1
 fi
 
@@ -103,7 +118,10 @@ dest="$INSTALL_DIR/termulaa"
 echo "→ Downloading $url"
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-curl -fsSL "$url" -o "$tmp"
+if ! curl -sSL --fail-with-body -o "$tmp" -m 300 "$url"; then
+    echo "Download failed: $url" >&2
+    exit 1
+fi
 chmod +x "$tmp"
 mv "$tmp" "$dest"
 trap - EXIT
