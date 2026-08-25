@@ -82,7 +82,15 @@ build_one() {
     if [ "$VERSION_EXPLICIT" = 1 ]; then
         EMBED_VERSION="v$VERSION"
     else
-        EMBED_VERSION=$(git -C "$PROJECT_ROOT" describe --tags --always --dirty 2>/dev/null || echo "v$VERSION")
+        # Built from the VERSION file rather than a request, so the tree is not
+        # necessarily the commit that version was released from. Carry the
+        # declared version so the binary agrees with its own filename, and mark
+        # it as a build rather than the release.
+        local SUFFIX=""
+        if [ -n "$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null)" ]; then
+            SUFFIX="-dirty"
+        fi
+        EMBED_VERSION="v$VERSION-dev+$GIT_COMMIT$SUFFIX"
     fi
 
     if CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
