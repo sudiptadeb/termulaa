@@ -1,4 +1,4 @@
-module github.com/sudiptadeb/termulaa
+module github.com/sudiptadeb/termulaa/src
 
 go 1.24.0
 
