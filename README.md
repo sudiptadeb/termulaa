@@ -97,8 +97,10 @@ Pairing:
 3. Run `termulaa -rc` on the same machine and paste the token when
    prompted. It persists to `~/.termulaa/rc.json` along with the server
    URL; later runs reconnect without prompting.
-4. Open the rendezvous view host in any browser and use the pairing
-   link it gives you.
+4. Open your terminal from the rendezvous in any browser — either a
+   link on its `/rc` page (path-prefix serving) or its dedicated view
+   host with the pairing link it gives you, depending on how the
+   rendezvous is configured.
 
 The token is an opaque string to termulaa — it is stored and presented
 verbatim, never parsed. Tokens expire by design (the rendezvous decides
@@ -120,6 +122,28 @@ Flags:
 
 See [SECURITY.md](SECURITY.md) for why this does not violate the
 loopback rule, and what the residual risks are.
+
+## Hosting under a path prefix
+
+termulaa can be served behind a reverse proxy under a subpath (e.g.
+`https://example.com/term/`), not just at a site root. The proxy must:
+
+1. strip the prefix before forwarding (termulaa's routes never change —
+   it still sees `/api/tabs`, `/ws/session/<id>`, …), and
+2. set `X-Forwarded-Prefix` to the stripped prefix (no trailing slash),
+   never passing through a client-supplied value.
+
+termulaa then renders its pages with `<base href="<prefix>/">` so the
+whole UI — fetches and WebSockets included — resolves under the prefix.
+The header is strictly sanitized (see
+[docs/rc-protocol.md §6.1](docs/rc-protocol.md) for the exact contract);
+anything invalid falls back to root-relative pages. Served directly with
+no proxy, nothing changes.
+
+Reverse-proxying does **not** relax the loopback rule: the listener
+still binds `127.0.0.1` only, and everything in [SECURITY.md](SECURITY.md)
+about exposing termulaa beyond loopback applies to the proxy you put in
+front of it.
 
 ## Run it as a service
 

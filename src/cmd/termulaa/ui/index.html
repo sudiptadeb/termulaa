@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <base href="/">
   <title>termulaa</title>
-  <script src="/lib/twind.min.js"></script>
-  <script defer src="/lib/alpine.min.js"></script>
+  <script src="lib/twind.min.js"></script>
+  <script defer src="lib/alpine.min.js"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 min-h-screen">
   <div x-data="tabList()" x-init="init()" class="max-w-3xl mx-auto px-6 py-10">
     <div class="flex items-center justify-between mb-8">
       <h1 class="text-2xl font-semibold text-white">termulaa</h1>
       <div class="flex gap-2">
-        <a href="/settings" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg hover:border-gray-500 transition">Settings</a>
+        <a href="settings" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg hover:border-gray-500 transition">Settings</a>
         <button @click="createTab()" class="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition">+ New Tab</button>
       </div>
     </div>
@@ -19,7 +20,7 @@
     <!-- Tab cards -->
     <div class="space-y-2">
       <template x-for="tab in tabs" :key="tab.id">
-        <a :href="'/tab/' + tab.id" class="flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 rounded-lg border border-gray-800 hover:border-gray-700 transition group">
+        <a :href="'tab/' + tab.id" class="flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 rounded-lg border border-gray-800 hover:border-gray-700 transition group">
           <div class="flex items-center gap-3">
             <!-- Status dot -->
             <div class="w-2.5 h-2.5 rounded-full" :class="tab.alive ? 'bg-green-500' : 'bg-red-500'"></div>
@@ -53,21 +54,21 @@
       },
       async loadTabs() {
         try {
-          const r = await fetch('/api/tabs');
+          const r = await fetch('api/tabs');
           this.tabs = await r.json();
         } catch (e) { console.error('Failed to load tabs:', e); }
       },
       async createTab() {
         try {
-          const r = await fetch('/api/tabs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'Terminal ' + (this.tabs.length + 1)}) });
+          const r = await fetch('api/tabs', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'Terminal ' + (this.tabs.length + 1)}) });
           const tab = await r.json();
-          window.location.href = '/tab/' + tab.id;
+          window.location.href = 'tab/' + tab.id;
         } catch (e) { console.error('Failed to create tab:', e); }
       },
       async deleteTab(id) {
         if (!confirm('Delete this tab and all its sessions?')) return;
         try {
-          await fetch('/api/tabs/' + id, { method: 'DELETE' });
+          await fetch('api/tabs/' + id, { method: 'DELETE' });
           this.tabs = this.tabs.filter(t => t.id !== id);
         } catch (e) { console.error('Failed to delete tab:', e); }
       },

@@ -18,6 +18,17 @@
   // ── Tab ID from URL ─────────────────────────────────────────────────────────
   window.TAB_ID = window.location.pathname.split('/').pop();
 
+  // ── URL construction ────────────────────────────────────────────────────────
+  // Every URL resolves against the page's <base href>, which the server sets
+  // to "/" locally and to the stripped prefix when hosted behind a reverse
+  // proxy under a path. Fetches use plain base-relative paths; WebSocket URLs
+  // are built explicitly here so the http(s)→ws(s) mapping is unambiguous.
+  function wsURL(path) {
+    var u = new URL(path, document.baseURI);
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return u.toString();
+  }
+
   // ── State ───────────────────────────────────────────────────────────────────
   var root = null;          // Root of the split tree (PaneNode or SplitNode)
   var activePane = null;    // Currently focused PaneNode
@@ -31,7 +42,7 @@
 
   async function loadServerSettings() {
     try {
-      var response = await fetch('/api/settings');
+      var response = await fetch('api/settings');
       if (response.ok) {
         serverSettings = await response.json();
       }
@@ -261,10 +272,9 @@
       pane.reconnectTimer = null;
     }
 
-    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = protocol + '//' + window.location.host + '/ws/session/' + pane.sessionID +
+    var wsUrl = wsURL('ws/session/' + pane.sessionID +
       '?tab_id=' + encodeURIComponent(window.TAB_ID) +
-      '&token=' + encodeURIComponent(ownerToken);
+      '&token=' + encodeURIComponent(ownerToken));
 
     var ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -833,7 +843,7 @@
 
     if (serverSettings.deleteOnClose && ownerToken) {
       try {
-        fetch('/api/tabs/' + window.TAB_ID, { method: 'DELETE', keepalive: true });
+        fetch('api/tabs/' + window.TAB_ID, { method: 'DELETE', keepalive: true });
       } catch (e) { /* ignore */ }
     }
   });
@@ -917,8 +927,7 @@
 
   function connectTabWS() {
     return new Promise(function(resolve, reject) {
-      var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      var wsUrl = protocol + '//' + window.location.host + '/ws/tab/' + window.TAB_ID;
+      var wsUrl = wsURL('ws/tab/' + window.TAB_ID);
 
       var ws = new WebSocket(wsUrl);
       tabWS = ws;

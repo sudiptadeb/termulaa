@@ -2,15 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <base href="/">
   <title>termulaa — Settings</title>
-  <script src="/lib/twind.min.js"></script>
-  <script defer src="/lib/alpine.min.js"></script>
+  <script src="lib/twind.min.js"></script>
+  <script defer src="lib/alpine.min.js"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 min-h-screen">
   <div x-data="settingsPage()" x-init="init()" class="max-w-2xl mx-auto px-6 py-10">
     <div class="flex items-center justify-between mb-8">
       <h1 class="text-2xl font-semibold text-white">Settings</h1>
-      <a href="/" class="text-sm text-gray-400 hover:text-white transition">&larr; Back</a>
+      <a href="." class="text-sm text-gray-400 hover:text-white transition">&larr; Back</a>
     </div>
 
     <!-- Appearance -->
@@ -114,13 +115,13 @@
       saved: false,
       async init() {
         try {
-          const r = await fetch('/api/settings');
+          const r = await fetch('api/settings');
           this.settings = await r.json();
         } catch (e) { console.error('Failed to load settings:', e); }
       },
       async save() {
         try {
-          await fetch('/api/settings', {
+          await fetch('api/settings', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(this.settings)

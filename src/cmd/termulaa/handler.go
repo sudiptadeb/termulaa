@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -39,6 +43,55 @@ func setCSP(w http.ResponseWriter) {
 			"frame-ancestors 'none'")
 }
 
+// maxForwardedPrefixLen bounds X-Forwarded-Prefix before any other check.
+const maxForwardedPrefixLen = 256
+
+// prefixSegmentPattern allowlists one path segment of a forwarded prefix.
+var prefixSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
+// sanitizePrefix validates an X-Forwarded-Prefix header value: the base-path
+// prefix a reverse proxy stripped before forwarding. The value is
+// attacker-influenceable input that ends up inside rendered HTML, so anything
+// that is not a strict absolute path made of allowlisted segments — no
+// scheme/host, no empty or dots-only segments, no trailing slash — is
+// rejected and the page renders as if served at the root.
+func sanitizePrefix(p string) string {
+	if p == "" || len(p) > maxForwardedPrefixLen {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+		return ""
+	}
+	for _, seg := range strings.Split(p[1:], "/") {
+		if !prefixSegmentPattern.MatchString(seg) || strings.Trim(seg, ".") == "" {
+			return ""
+		}
+	}
+	return p
+}
+
+var basePlaceholder = []byte(`<base href="/">`)
+
+// serveUIPage renders one embedded HTML page. When the request carries a
+// valid X-Forwarded-Prefix (set by a reverse proxy hosting termulaa under a
+// path), the page's <base href="/"> becomes <base href="<prefix>/"> so its
+// base-relative URLs resolve under that prefix; routes never change — the
+// proxy strips the prefix before forwarding.
+func serveUIPage(w http.ResponseWriter, r *http.Request, file string) {
+	data, err := uiFS.ReadFile("ui/" + file)
+	if err != nil {
+		http.Error(w, file+" not found", http.StatusInternalServerError)
+		return
+	}
+	if prefix := sanitizePrefix(r.Header.Get("X-Forwarded-Prefix")); prefix != "" {
+		rendered := []byte(`<base href="` + html.EscapeString(prefix) + `/">`)
+		data = bytes.Replace(data, basePlaceholder, rendered, 1)
+	}
+	setCSP(w)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
 func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	// Static UI files (embedded)
 	sub, err := fs.Sub(uiFS, "ui")
@@ -48,29 +101,18 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	fileServer := http.FileServer(http.FS(sub))
 
 	// HTML pages
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		serveUIPage(w, r, "index.html")
+	})
 	mux.HandleFunc("GET /tab/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !isValidID(r.PathValue("id")) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		data, err := uiFS.ReadFile("ui/tab.html")
-		if err != nil {
-			http.Error(w, "tab.html not found", http.StatusInternalServerError)
-			return
-		}
-		setCSP(w)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(data)
+		serveUIPage(w, r, "tab.html")
 	})
 	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
-		data, err := uiFS.ReadFile("ui/settings.html")
-		if err != nil {
-			http.Error(w, "settings.html not found", http.StatusInternalServerError)
-			return
-		}
-		setCSP(w)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(data)
+		serveUIPage(w, r, "settings.html")
 	})
 
 	// REST API — Tabs

@@ -66,6 +66,16 @@ Residual risks, accepted knowingly when you opt in to `-rc`:
 - **Rendezvous compromise or malice** — the rendezvous terminates TLS
   and can open streams to your terminal at will. Only tunnel to a
   rendezvous you trust as much as the machine itself (ideally your own).
+- **Same-origin serving removes browser isolation.** A rendezvous may
+  serve the proxied terminal under a path prefix on its own hostname
+  (see docs/rc-protocol.md §6.1) instead of a dedicated view host. That
+  is convenient — no extra DNS or TLS — but it puts a remote shell and
+  the rendezvous's own web app on the SAME browser origin, so the
+  browser no longer isolates them from each other: an XSS bug in either
+  one can drive the other (read the terminal, send keystrokes, call the
+  rendezvous's APIs as you). A dedicated view host restores that
+  boundary and is the more secure deployment. Choose it when you care
+  about worst-case containment more than setup effort.
 - **Token leakage** — a leaked token is remote shell access until it
   expires or is revoked.
 - **`-rc-insecure`** disables TLS certificate verification on the

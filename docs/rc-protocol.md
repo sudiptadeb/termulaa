@@ -163,10 +163,44 @@ so the public host does not leak into the local process, and SHOULD
 flush proxied responses immediately (unbuffered) so terminal output is
 not delayed.
 
-Because termulaa's UI uses absolute root paths (`/api/...`, `/ws/...`)
-and derives its WebSocket URL from `window.location.host`, the server
-SHOULD expose the proxied terminal on a dedicated hostname rather than
-under a path prefix.
+### 6.1 Where to expose the proxied terminal
+
+A server MAY expose the proxied terminal either on a **dedicated
+hostname** (every path on that host is proxied verbatim) or **under a
+path prefix** on an existing host (e.g. `/rc/t/<agent>/...`).
+
+A dedicated hostname gives the terminal its own browser origin,
+isolating it from everything else the server hosts — the more secure
+choice when the DNS and TLS work is acceptable.
+
+To serve under a path prefix, the server MUST strip the prefix from the
+forwarded request path (termulaa's routes are unchanged: it still sees
+`/api/tabs`, `/ws/session/<id>`, …) and MUST send the stripped prefix in
+the de-facto-standard `X-Forwarded-Prefix` request header, without a
+trailing slash (e.g. `X-Forwarded-Prefix: /rc/t/abc123`). The server
+MUST NOT pass through a client-supplied `X-Forwarded-Prefix`; it either
+sets its own value or removes the header.
+
+termulaa's side of the contract: its UI is base-path aware. Every HTML
+page carries `<base href="/">`, all UI URLs are base-relative, and when
+a request for a page carries a **valid** `X-Forwarded-Prefix` the page
+is rendered with `<base href="<prefix>/">` instead, so the entire UI —
+fetches and WebSockets included — resolves under the prefix.
+
+Because the header is attacker-influenceable input that is rendered into
+HTML, termulaa sanitizes it strictly and silently falls back to `/` on
+any violation. A prefix is accepted only if it:
+
+- starts with `/` and does not end with `/`,
+- is at most 256 bytes,
+- consists of `/`-separated segments matching `[A-Za-z0-9._~-]+`
+  (so no scheme, host, query, quotes, angle brackets, spaces, or
+  percent-escapes),
+- contains no empty and no dots-only (`.`, `..`, `...`) segments.
+
+The accepted value is additionally HTML-escaped when emitted. A server
+choosing a prefix outside this shape gets root-relative pages, not an
+error.
 
 ## 7. Tokens
 
