@@ -1002,6 +1002,7 @@
   var KEYBAR_KEYS = [
     { label: 'Tab', key: 'Tab', keyCode: 9, code: 'Tab' },
     { label: 'Esc', key: 'Escape', keyCode: 27, code: 'Escape' },
+    { label: '⏎', aria: 'Enter', key: 'Enter', keyCode: 13, code: 'Enter' },
     { label: 'Ctrl', mod: 'ctrl' },
     { label: '↑', aria: 'Arrow up', key: 'ArrowUp', keyCode: 38, code: 'ArrowUp' },
     { label: '↓', aria: 'Arrow down', key: 'ArrowDown', keyCode: 40, code: 'ArrowDown' },
