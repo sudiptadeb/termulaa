@@ -35,6 +35,15 @@ curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh
 Detects OS (linux/darwin) and arch (amd64/arm64), installs to
 `~/.local/bin/termulaa`.
 
+Re-running the same command upgrades in place: it compares
+`termulaa -version` against the latest release, replaces the binary
+only when they differ, and restarts anything the service manager runs
+(server first, then the tunnel agent) so the new version is actually
+live. A `termulaa` you started by hand keeps running the old binary —
+the installer tells you which processes those are, but never kills
+them; restart them yourself. Pass `--no-restart` to stage the binary
+without touching anything running.
+
 ### Manual
 
 Grab the binary for your platform from the
@@ -57,6 +66,8 @@ termulaa
 ```
 
 Then open <http://127.0.0.1:17380/> in your browser.
+`termulaa -version` prints the installed version (also shown on
+`/health`).
 
 Change the port with `-port 17381`, or edit settings at
 `http://127.0.0.1:17380/settings`.
@@ -127,7 +138,7 @@ Flags:
 | `-rc-server URL` | rendezvous base URL |
 | `-rc-token TOKEN` | tunnel token (otherwise saved/prompted) |
 | `-rc-target HOST:PORT` | local termulaa to splice to (default `127.0.0.1:<port>`) |
-| `-rc-label NAME` | agent label shown on the rendezvous (default: hostname) |
+| `-rc-label NAME` | agent label shown on the rendezvous (saved to `~/.termulaa/rc.json`, so you only pass it once; default: saved label, else hostname) |
 | `-rc-tunnels N` | pooled tunnel connections, 1–8 (default 4) |
 | `-rc-insecure` | skip TLS verification — dev-only, for self-signed rendezvous certs |
 
@@ -166,7 +177,9 @@ processes up to start at login/boot and restart on failure — systemd
 curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh | bash -s -- --service
 ```
 
-Re-running it is safe; it rewrites the service files in place. The
+Re-running it is safe; it rewrites the service files in place and
+restarts the services onto the freshly installed binary (an already
+running unit would otherwise keep executing the old one). The
 templates live in [resources/service/](resources/service/) if you prefer
 to install them by hand (replace the `@TERMULAA_BIN@` / `@HOME@`
 placeholders).
