@@ -35,15 +35,19 @@ COMPONENT="termulaa"
 # build without an explicit version produces the same number.
 VERSION="$(tr -d ' \r\n' < "$PROJECT_ROOT/VERSION" 2>/dev/null || echo 0.1.0)"
 
+VERSION_EXPLICIT=0
+
 if [ -n "$1" ]; then
     if [[ "$1" =~ ^[0-9]+\.[0-9]+ ]]; then
         VERSION="$1"
+        VERSION_EXPLICIT=1
     else
         COMPONENT="$1"
     fi
 fi
 if [ -n "$2" ]; then
     VERSION="$2"
+    VERSION_EXPLICIT=1
 fi
 
 echo "=== termulaa Build ==="
@@ -71,11 +75,18 @@ build_one() {
     BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     local GIT_COMMIT
     GIT_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    local GIT_TAG
-    GIT_TAG=$(git -C "$PROJECT_ROOT" describe --tags --always --dirty 2>/dev/null || echo "$VERSION")
+    # An explicitly requested version wins: CI releases from the VERSION file
+    # BEFORE the tag exists, so `git describe` at that point reports the
+    # previous tag plus a distance and the binary would lie about itself.
+    local EMBED_VERSION
+    if [ "$VERSION_EXPLICIT" = 1 ]; then
+        EMBED_VERSION="v$VERSION"
+    else
+        EMBED_VERSION=$(git -C "$PROJECT_ROOT" describe --tags --always --dirty 2>/dev/null || echo "v$VERSION")
+    fi
 
     if CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
-        -ldflags "-X main.Version=$GIT_TAG -X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -s -w" \
+        -ldflags "-X main.Version=$EMBED_VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -s -w" \
         -o "$TARGET_DIR/$OUTPUT_NAME" \
         "$CMD_PATH"; then
         [ "$GOOS" != "windows" ] && chmod +x "$TARGET_DIR/$OUTPUT_NAME"

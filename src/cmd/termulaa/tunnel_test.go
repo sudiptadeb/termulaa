@@ -115,12 +115,28 @@ func TestRCStateRoundTrip(t *testing.T) {
 		t.Fatalf("loadRCState with no file = %+v, want zero value", got)
 	}
 
-	want := rcState{Server: "https://memd.example.com", Token: "v1.abc.def", Insecure: true}
+	want := rcState{Server: "https://memd.example.com", Token: "v1.abc.def", Label: "Ai test", Insecure: true}
 	if err := saveRCState(want); err != nil {
 		t.Fatalf("saveRCState: %v", err)
 	}
 	if got := loadRCState(); got != want {
 		t.Fatalf("loadRCState = %+v, want %+v", got, want)
+	}
+}
+
+func TestRCStateLabelBackwardCompat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// rc.json written before the label existed must still load, with Label empty.
+	if err := saveRCState(rcState{Server: "https://memd.example.com", Token: "v1.abc.def"}); err != nil {
+		t.Fatalf("saveRCState: %v", err)
+	}
+	got := loadRCState()
+	if got.Label != "" {
+		t.Fatalf("Label = %q, want empty", got.Label)
+	}
+	if got.Token != "v1.abc.def" {
+		t.Fatalf("Token = %q, want round-tripped token", got.Token)
 	}
 }
 

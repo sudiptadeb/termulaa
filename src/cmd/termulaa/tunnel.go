@@ -75,6 +75,7 @@ type TunnelConfig struct {
 type rcState struct {
 	Server   string `json:"server"`
 	Token    string `json:"token"`
+	Label    string `json:"label,omitempty"`
 	Insecure bool   `json:"insecure,omitempty"`
 }
 
@@ -138,6 +139,10 @@ func runTunnelAgent(cfg TunnelConfig) error {
 	if cfg.Token != "" {
 		st.Token = strings.TrimSpace(cfg.Token)
 	}
+	cfg.Label = strings.TrimSpace(cfg.Label)
+	if cfg.Label != "" {
+		st.Label = cfg.Label
+	}
 	if cfg.Insecure != nil {
 		st.Insecure = *cfg.Insecure
 	}
@@ -147,6 +152,11 @@ func runTunnelAgent(cfg TunnelConfig) error {
 	if cfg.Target == "" {
 		cfg.Target = fmt.Sprintf("127.0.0.1:%d", loadFullConfig().Port)
 	}
+	if cfg.Label == "" {
+		cfg.Label = st.Label
+	}
+	// The hostname fallback is deliberately not persisted: only a label the
+	// user chose goes to rc.json, so a renamed host keeps tracking its name.
 	if cfg.Label == "" {
 		if hn, err := os.Hostname(); err == nil && hn != "" {
 			cfg.Label = hn

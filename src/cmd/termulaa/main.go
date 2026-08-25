@@ -133,11 +133,17 @@ func main() {
 	rcServer := flag.String("rc-server", "", "rendezvous base URL for -rc (default from ~/.termulaa/rc.json, else the reference rendezvous)")
 	rcTarget := flag.String("rc-target", "", "local termulaa address for -rc to splice to (default 127.0.0.1:<port>)")
 	rcToken := flag.String("rc-token", "", "tunnel token for -rc (default from ~/.termulaa/rc.json; prompts if unset)")
-	rcLabel := flag.String("rc-label", "", "agent label shown on the rendezvous for -rc (default: hostname)")
+	rcLabel := flag.String("rc-label", "", "agent label shown on the rendezvous for -rc (persisted to ~/.termulaa/rc.json; default: saved label, else hostname)")
 	rcTunnels := flag.Int("rc-tunnels", 0, "pooled tunnel connections for -rc, 1-8 (default 4)")
 	rcTakeover := flag.Bool("rc-takeover", false, "for -rc: disconnect another agent currently connected with this token (default: refuse and exit)")
 	rcInsecure := flag.Bool("rc-insecure", false, "skip TLS verification for -rc dials (dev only; persisted to ~/.termulaa/rc.json)")
+	versionFlag := flag.Bool("version", false, "print the termulaa version and exit")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(Version)
+		return
+	}
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
