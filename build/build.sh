@@ -31,7 +31,9 @@ fi
 
 # Parse args: first arg is component (or version if numeric), second is version
 COMPONENT="termulaa"
-VERSION="0.1.0"
+# One source of truth: the VERSION file is what CI releases from, so a local
+# build without an explicit version produces the same number.
+VERSION="$(tr -d ' \r\n' < "$PROJECT_ROOT/VERSION" 2>/dev/null || echo 0.1.0)"
 
 if [ -n "$1" ]; then
     if [[ "$1" =~ ^[0-9]+\.[0-9]+ ]]; then

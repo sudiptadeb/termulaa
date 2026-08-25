@@ -1,12 +1,13 @@
 name: release
 
+# Three ways in, all landing on the same build:
+#   - push to main: releases when VERSION names a tag that does not exist yet
+#   - push a v* tag: the original path, unchanged
+#   - manual dispatch: for re-cutting a version from the Actions tab
 on:
   push:
+    branches: [main]
     tags: ['v*']
-  # Cutting a release by pushing a tag needs a local checkout and push rights
-  # for refs/tags. Dispatching does the same work from the Actions tab, and
-  # creates the tag at the built commit, so a release never depends on who can
-  # push a tag from where.
   workflow_dispatch:
     inputs:
       version:
@@ -22,30 +23,52 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # so git describe / tag picks up properly
+          fetch-depth: 0  # tags must be present to tell a new version from a released one
+
+      - name: Decide whether to release
+        id: rel
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            tag="${{ inputs.version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+          else
+            tag="v$(tr -d ' \r\n' < VERSION)"
+          fi
+
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::version must look like v1.2.3, got: $tag"; exit 1 ;;
+          esac
+
+          # A branch push only releases a version that has not been released yet,
+          # so ordinary commits to main do nothing until VERSION moves.
+          if [ "${{ github.ref_type }}" != "tag" ] && [ -z "${{ inputs.version }}" ] \
+             && git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$tag is already released; VERSION has not moved."
+            exit 0
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "::notice::releasing $tag"
 
       - uses: actions/setup-go@v7
+        if: steps.rel.outputs.release == 'true'
         with:
           go-version-file: src/go.mod
           cache-dependency-path: src/go.sum
 
-      - name: Resolve tag
-        id: rel
-        run: |
-          tag="${{ inputs.version || github.ref_name }}"
-          case "$tag" in
-            v*) ;;
-            *) echo "version must start with v, got: $tag" >&2; exit 1 ;;
-          esac
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "releasing $tag"
-
       - name: Build all platforms
+        if: steps.rel.outputs.release == 'true'
         env:
           TAG: ${{ steps.rel.outputs.tag }}
         run: bash build/build.sh termulaa "${TAG#v}"
 
       - name: Rename release assets
+        if: steps.rel.outputs.release == 'true'
         env:
           TAG: ${{ steps.rel.outputs.tag }}
         run: |
@@ -58,12 +81,12 @@ jobs:
           ls -la release/
 
       - name: Create release and upload binaries
+        if: steps.rel.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          # --target creates the tag at this commit when dispatched; on a tag
-          # push it already exists and points here anyway.
+          # --target creates the tag at the built commit when there is not one already.
           gh release create "$TAG" \
             --target "${{ github.sha }}" \
             --title "$TAG" \
