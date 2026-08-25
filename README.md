@@ -121,6 +121,86 @@ Flags:
 See [SECURITY.md](SECURITY.md) for why this does not violate the
 loopback rule, and what the residual risks are.
 
+## Run it as a service
+
+Optional. `install.sh --service` installs the binary and sets both
+processes up to start at login/boot and restart on failure — systemd
+*user* units on Linux (no sudo), launchd LaunchAgents on macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh | bash -s -- --service
+```
+
+Re-running it is safe; it rewrites the service files in place. The
+templates live in [resources/service/](resources/service/) if you prefer
+to install them by hand (replace the `@TERMULAA_BIN@` / `@HOME@`
+placeholders).
+
+**Pair before the tunnel agent can run as a service.** The agent needs a
+token, and under systemd/launchd there is no terminal to prompt on — it
+exits immediately with `no token entered`. So the installer starts the
+terminal server right away but leaves the agent service installed,
+*not* started, until `~/.termulaa/rc.json` holds a token. The flow:
+
+1. `install.sh --service` — server service up, agent service installed.
+2. Run `termulaa -rc` once in a terminal and paste a token (see
+   [Remote access](#remote-access)). Ctrl-C it after it connects.
+3. Start the agent service (commands below) — or just re-run
+   `install.sh --service`, which now finds the token and starts it.
+
+When a token expires the agent exits the same way; mint a fresh one, run
+`termulaa -rc -rc-token <new token>` once, and restart the service.
+
+### Linux (systemd user units)
+
+Units are written to `~/.config/systemd/user/`. The installer also runs
+`loginctl enable-linger $USER` so your user services keep running after
+logout and start at boot; if that fails it prints the command for you to
+run yourself. `systemctl --user` needs a systemd user session — where
+there is none (some containers and SSH setups), the installer says so
+and leaves you with the plain binary.
+
+```bash
+systemctl --user enable --now termulaa-rc      # after pairing
+systemctl --user status termulaa termulaa-rc   # status
+journalctl --user -u termulaa -f               # server logs
+journalctl --user -u termulaa-rc -f            # agent logs
+```
+
+If the agent service starts without a token it exits and systemd retries
+briefly (`StartLimitBurst=5` over 2 minutes), then gives up rather than
+looping forever. After pairing, `systemctl --user restart termulaa-rc`.
+
+Disable / remove:
+
+```bash
+systemctl --user disable --now termulaa termulaa-rc
+rm ~/.config/systemd/user/termulaa.service ~/.config/systemd/user/termulaa-rc.service
+systemctl --user daemon-reload
+```
+
+### macOS (launchd LaunchAgents)
+
+Plists are written to `~/Library/LaunchAgents/`; logs go to
+`~/.termulaa/logs/server.log` and `~/.termulaa/logs/rc.log`.
+
+```bash
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.termulaa.rc.plist   # after pairing
+launchctl print gui/$UID/com.termulaa.server                                # status
+tail -f ~/.termulaa/logs/server.log ~/.termulaa/logs/rc.log                 # logs
+```
+
+Without a saved token the agent exits at start and launchd retries every
+30 seconds (`ThrottleInterval`), logging to `rc.log`, until you pair.
+
+Disable / remove:
+
+```bash
+launchctl bootout gui/$UID/com.termulaa.server
+launchctl bootout gui/$UID/com.termulaa.rc
+rm ~/Library/LaunchAgents/com.termulaa.server.plist ~/Library/LaunchAgents/com.termulaa.rc.plist
+```
+
 ## Why
 
 `ttyd` + `tmux` gets you "browser-rendered PTY with persistence," but
@@ -156,6 +236,7 @@ src/cmd/termulaa/    # Go sources + embedded ui/
 docs/                # rc-protocol.md — the remote-access protocol spec
 resources/plans/     # design docs
 resources/scripts/   # run + benchmark helpers
+resources/service/   # systemd user unit + launchd plist templates
 resources/images/    # README screenshots + GIFs
 ```
 

@@ -1,0 +1,14 @@
+# systemd user unit for the termulaa terminal server (loopback-only).
+# @TERMULAA_BIN@ is replaced with the absolute binary path by
+# `install.sh --service`; substitute it yourself for manual installs.
+[Unit]
+Description=termulaa terminal server (loopback-only)
+Documentation=https://github.com/sudiptadeb/termulaa
+
+[Service]
+ExecStart=@TERMULAA_BIN@
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

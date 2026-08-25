@@ -1,0 +1,23 @@
+# systemd user unit for the termulaa reverse tunnel agent (`termulaa -rc`).
+# @TERMULAA_BIN@ is replaced with the absolute binary path by
+# `install.sh --service`; substitute it yourself for manual installs.
+#
+# Pair BEFORE enabling this unit: run `termulaa -rc` once in a terminal
+# and paste a token (saved to ~/.termulaa/rc.json). Without a saved token
+# the agent cannot prompt (no tty here) and exits immediately, so the
+# start limit below stops the restart loop after a few attempts.
+[Unit]
+Description=termulaa reverse tunnel agent
+Documentation=https://github.com/sudiptadeb/termulaa/blob/main/docs/rc-protocol.md
+After=termulaa.service
+Wants=termulaa.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+ExecStart=@TERMULAA_BIN@ -rc
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

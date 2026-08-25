@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd LaunchAgent for the termulaa reverse tunnel agent
+     (`termulaa -rc`). @TERMULAA_BIN@ and @HOME@ are replaced with the
+     absolute binary path and the user's home directory by install.sh in
+     service mode; substitute them yourself for manual installs.
+
+     Pair BEFORE loading this agent: run `termulaa -rc` once in a
+     terminal and paste a token (saved to ~/.termulaa/rc.json). Without a
+     saved token the agent cannot prompt (no tty here) and exits
+     immediately; launchd then retries every ThrottleInterval seconds,
+     logging the failure to rc.log until you pair. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.termulaa.rc</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@TERMULAA_BIN@</string>
+		<string>-rc</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>@HOME@/.termulaa/logs/rc.log</string>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/.termulaa/logs/rc.log</string>
+</dict>
+</plist>

@@ -167,6 +167,8 @@ meaningful tests is always welcome (see issue #3).
 | `docs/rc-protocol.md` | Normative remote-access protocol spec |
 | `src/cmd/termulaa/ui/app.js` | Frontend — tabs, panes, xterm.js |
 | `build/build.sh` | Cross-compile to `dist/<os>/` |
+| `install.sh` | Release installer; `--service` sets up user services |
+| `resources/service/` | systemd user unit + launchd plist templates |
 | `.github/workflows/build.yml` | gofmt, go vet, build on push/PR |
 | `.github/workflows/release.yml` | Release on tag push |
 
