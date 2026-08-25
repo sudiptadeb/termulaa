@@ -52,8 +52,10 @@ Full threat model in [SECURITY.md](SECURITY.md). Short version:
 ## Design philosophy
 
 **"Simple is Hard, Easy is Easy"** — small surface, minimal deps, no
-frameworks. Two Go deps: `creack/pty` and `gorilla/websocket`. Frontend
-is vendored — no npm, no bundler, no build step.
+frameworks. Three Go deps: `creack/pty`, `gorilla/websocket`, and
+`xtaci/smux` (justified third: multiplexes all `-rc` viewer connections
+over a small pool of outbound tunnels; hand-rolled stream framing would
+be riskier). Frontend is vendored — no npm, no bundler, no build step.
 
 ## Key patterns
 
@@ -160,6 +162,9 @@ meaningful tests is always welcome (see issue #3).
 | `src/cmd/termulaa/manager.go` | Sessions, tabs, state persistence |
 | `src/cmd/termulaa/session.go` | PTY, scrollback ring buffer |
 | `src/cmd/termulaa/tabs.go` | Binary split-tree layout helpers |
+| `src/cmd/termulaa/tunnel.go` | `-rc` reverse tunnel agent (pooled smux tunnels) |
+| `src/cmd/termulaa/wsconn.go` | WebSocket-as-net.Conn adapter for the tunnel |
+| `docs/rc-protocol.md` | Normative remote-access protocol spec |
 | `src/cmd/termulaa/ui/app.js` | Frontend — tabs, panes, xterm.js |
 | `build/build.sh` | Cross-compile to `dist/<os>/` |
 | `.github/workflows/build.yml` | gofmt, go vet, build on push/PR |
@@ -167,12 +172,14 @@ meaningful tests is always welcome (see issue #3).
 
 ## Don't do
 
-- Don't introduce new deps lightly. Two is the current total. Adding a
-  third needs a real justification.
+- Don't introduce new deps lightly. Three is the current total
+  (`xtaci/smux` being the justified third — see Design philosophy).
+  Adding another needs a real justification.
 - Don't add frameworks to the frontend. Plain HTML + Alpine + Twind is
   the aesthetic.
-- Don't add auth, TLS, or multi-user features to this repo. Those
-  belong in a fork or a separate project — not here (see SECURITY.md).
+- Don't add auth, TLS, or multi-user features to the terminal server.
+  Those belong in a rendezvous implementing `docs/rc-protocol.md` — the
+  server here stays loopback-only (see SECURITY.md).
 - Don't "refactor for clarity" alongside a feature change. Split them.
 - Don't write long comment blocks or multi-paragraph docstrings. One
   short line max, and only when the WHY is non-obvious.

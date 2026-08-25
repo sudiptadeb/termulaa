@@ -1,0 +1,218 @@
+# termulaa remote-access protocol (rc), version 1
+
+This document is the normative specification of the protocol spoken by
+`termulaa -rc`. It is vendor-neutral: a third party can implement a
+compatible rendezvous server from this document alone. The reference
+implementation lives in [memd](https://memd.debkosh.com), but nothing
+here depends on it.
+
+The key words MUST, MUST NOT, SHOULD, and MAY are to be interpreted as
+described in RFC 2119.
+
+## 1. Mental model
+
+termulaa is a loopback-only terminal server on `127.0.0.1:<port>`. It is
+never modified to be remote-aware and never listens on a non-loopback
+interface.
+
+Remote access is provided by a separate process, the **agent**
+(`termulaa -rc`), and a publicly reachable **server** (the rendezvous).
+The agent dials *out* to the server and holds a small pool of long-lived
+WebSocket connections — **tunnels**. Each tunnel carries an smux
+session. Every browser connection that the server wants to forward
+becomes one **stream** multiplexed inside a tunnel. The agent accepts
+the stream, dials the local termulaa over TCP, and splices bytes.
+
+```
+browser ──HTTPS/WSS──> server (rendezvous)
+                          │  OpenStream() on a pooled smux session
+                          │  (the session rides INSIDE a WebSocket the agent dialed)
+                          ▼
+                   termulaa -rc agent ──TCP──> 127.0.0.1:<port> (unmodified termulaa)
+```
+
+The tunnel is *reverse* because the TCP/TLS connection direction is
+always agent → server. No inbound port is ever opened on the user's
+machine; the loopback-only property of termulaa is preserved exactly.
+
+The agent is a dumb byte pump. It MUST NOT parse HTTP inside streams and
+holds no knowledge of terminals.
+
+Terminology, used consistently below: a **tunnel** is one live smux
+session over one WebSocket. A browser connection is a **stream**
+multiplexed inside a tunnel. A stream is not a tunnel.
+
+## 2. Transport: the tunnel endpoint
+
+The server MUST accept WebSocket upgrades at:
+
+```
+GET <server>/rc/tunnel
+```
+
+over `ws://` (development) or `wss://` (production). The agent derives
+the URL from its configured server base URL: `http(s)` maps to
+`ws(s)`, and any base path is preserved (`https://example.com/x` →
+`wss://example.com/x/rc/tunnel`).
+
+The agent authenticates with:
+
+```
+Authorization: Bearer <token>
+```
+
+The server MUST validate the token before completing the upgrade and
+MUST respond `401` or `403` on failure. The agent treats `401`/`403` as
+terminal (it stops and tells the user to re-pair); any other failure is
+retried with backoff.
+
+Query parameters sent by the agent:
+
+| Param | Meaning |
+|-------|---------|
+| `agent` | human-readable label for display (default: the machine's hostname) |
+| `session` | 0-based index of this tunnel within the agent's pool |
+| `port` | the local TCP port the agent splices streams to — the server MUST use it for header rewriting (section 6) |
+
+## 3. Framing: WebSocket as a byte pipe
+
+Raw smux bytes ride in WebSocket **binary** messages. Both sides adapt
+the WebSocket to an ordered byte pipe (a `net.Conn` in Go) with these
+semantics:
+
+- **Read**: if a buffered remainder from a previous message exists,
+  drain it first; otherwise read the next message and buffer what does
+  not fit. One message MAY be consumed across many reads. Message
+  boundaries carry no meaning.
+- **Write**: exactly one binary message per write call, serialized by a
+  mutex (WebSocket libraries typically permit only one concurrent
+  writer).
+- **No WebSocket read deadline and no ping/pong liveness scheme.**
+  smux's own keepalive (section 4) is the liveness detector. Write
+  deadlines MAY map to the WebSocket write deadline.
+
+## 4. Multiplexing: smux roles and configuration
+
+Both sides run [smux](https://github.com/xtaci/smux) v1.5.x over the
+byte pipe, with fixed roles that MUST NOT be swapped:
+
+| Side | smux role | Operation |
+|------|-----------|-----------|
+| agent | `smux.Server` | `AcceptStream()` |
+| server | `smux.Client` | `OpenStream()` |
+
+Rationale: the server initiates work (a browser arrived); the agent
+serves it.
+
+The smux configuration MUST be identical on both sides. A mismatch does
+not fail loudly — it causes silent stalls. The exact configuration:
+
+```go
+func muxConfig() *smux.Config {
+	c := smux.DefaultConfig()
+	c.Version = 2
+	c.KeepAliveInterval = 10 * time.Second
+	c.KeepAliveTimeout = 30 * time.Second
+	c.MaxFrameSize = 32 * 1024
+	c.MaxReceiveBuffer = 4 * 1024 * 1024
+	c.MaxStreamBuffer = 512 * 1024
+	return c
+}
+```
+
+A non-Go implementation MUST speak smux protocol version 2 with
+equivalent settings.
+
+## 5. Stream semantics
+
+One stream = one browser connection (an HTTP request or an upgraded
+WebSocket). For every accepted stream the agent:
+
+1. dials `127.0.0.1:<port>` over TCP,
+2. copies bytes in both directions,
+3. closes both ends when either side closes.
+
+The agent MUST NOT inspect or transform the bytes. The server SHOULD
+spread streams across the pool (e.g. least-loaded live tunnel) so
+head-of-line blocking stays bounded, and SHOULD skip and reap dead
+tunnels.
+
+## 6. REQUIRED server behavior: Host and Origin rewriting
+
+**This is the single most important requirement for an implementer.**
+
+termulaa defends against DNS rebinding with a Host-header allowlist
+(`127.0.0.1`, `localhost`, `::1` on its port) and an Origin allowlist.
+A request carrying the public hostname is rejected with `421`/`403`.
+Because the agent forwards bytes verbatim, the server MUST rewrite each
+forwarded request so an *unmodified* termulaa accepts it, using the
+`port` value the agent reported at tunnel registration:
+
+```go
+target := "localhost:" + agentInfo.Port
+req.URL.Scheme = "http"
+req.URL.Host   = target
+req.Host       = target                             // Host-header allowlist
+if req.Header.Get("Origin") != "" {                 // Origin allowlist
+    req.Header.Set("Origin", "http://"+target)
+}
+```
+
+The server SHOULD also strip `X-Forwarded-Host` and `X-Forwarded-Proto`
+so the public host does not leak into the local process, and SHOULD
+flush proxied responses immediately (unbuffered) so terminal output is
+not delayed.
+
+Because termulaa's UI uses absolute root paths (`/api/...`, `/ws/...`)
+and derives its WebSocket URL from `window.location.host`, the server
+SHOULD expose the proxied terminal on a dedicated hostname rather than
+under a path prefix.
+
+## 7. Tokens
+
+**The token is opaque to termulaa.** The agent stores the string it was
+given (in `~/.termulaa/rc.json`) and presents it verbatim in the
+`Authorization` header. It MUST NOT parse it, validate it, or assume any
+structure or encoding. Token format, signing, storage, revocation, and
+expiry are entirely the server's business — one server may issue
+HMAC-signed stateless tokens, another random database-backed ones.
+
+Expiry is discovered by being rejected at connect time (`401`/`403`),
+never by inspecting the token.
+
+The server SHOULD serve a pairing page at `<server>/rc` where an
+authenticated user mints a token; the agent simply prompts the user to
+paste the string. Tokens SHOULD expire so that lost or leaked tokens
+retire themselves; the agent's re-pair message points users at
+`<server>/rc`.
+
+Servers SHOULD never log full tokens (log a hash prefix instead), and
+the agent does the same.
+
+## 8. Reconnection
+
+The agent maintains its pool of tunnels independently: each tunnel
+reconnects on failure with exponential backoff (1s doubling to a 30s
+cap, reset after a connection that stayed up), randomized with jitter so
+pool members do not reconnect in lockstep after a server restart. The
+server MUST tolerate tunnels coming and going and treat each `(token,
+session)` registration as replacing any stale predecessor.
+
+**Revocation of a token that is already connected.** Only a handshake
+`401`/`403` stops the agent. A server that revokes a live token closes
+the tunnels; the agent cannot distinguish that from a network drop, so
+it retries — and is then refused at the next handshake, which stops it.
+Revocation therefore converges within one backoff interval (at most 30s)
+rather than instantly. Servers MUST close revoked tunnels rather than
+leaving them open, and MUST re-check the token on every reconnect
+instead of trusting a previously accepted one.
+
+## 9. Versioning
+
+This is version 1 of the protocol, identified by the `/rc/tunnel` path.
+Any incompatible change — framing, smux roles or configuration, auth
+scheme — MUST use a new endpoint path (e.g. `/rc/v2/tunnel`) so old
+agents fail cleanly at connect time rather than stalling. Additive,
+backward-compatible changes (new optional query parameters) MAY be made
+within version 1; servers MUST ignore query parameters they do not
+understand.

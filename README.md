@@ -70,6 +70,57 @@ refuse to open them. Fix:
 xattr -d com.apple.quarantine ~/.local/bin/termulaa
 ```
 
+## Remote access
+
+Optional. termulaa itself stays loopback-only — the server never listens
+on anything but `127.0.0.1`, even in this mode. Remote access works
+through a **reverse tunnel**: `termulaa -rc` runs a separate agent that
+dials *out* to a rendezvous server over WebSocket and splices bytes
+between the rendezvous and your local termulaa. No inbound port is ever
+opened on your machine.
+
+The protocol is owned by this repo and specified in
+[docs/rc-protocol.md](docs/rc-protocol.md) — any server implementing it
+works. The default rendezvous is the reference implementation (built in
+memd); point the agent at your own with `-rc-server https://your.server`
+(persisted to `~/.termulaa/rc.json`, so you only pass it once).
+
+The agent holds a small pool of long-lived outbound connections
+(tunnels), each carrying an smux session; every browser connection is a
+stream multiplexed inside one of them. The agent parses no HTTP and
+knows nothing about terminals — it is a dumb byte pump.
+
+Pairing:
+
+1. Start termulaa normally (`termulaa`).
+2. Open `<rendezvous>/rc` in a browser, sign in, mint a tunnel token.
+3. Run `termulaa -rc` on the same machine and paste the token when
+   prompted. It persists to `~/.termulaa/rc.json` along with the server
+   URL; later runs reconnect without prompting.
+4. Open the rendezvous view host in any browser and use the pairing
+   link it gives you.
+
+The token is an opaque string to termulaa — it is stored and presented
+verbatim, never parsed. Tokens expire by design (the rendezvous decides
+when); when one does, the agent stops with a message pointing at
+`<rendezvous>/rc`. Mint a fresh token and run `-rc` again with
+`-rc-token <new token>`.
+
+Flags:
+
+| Flag | Meaning |
+|------|---------|
+| `-rc` | run the tunnel agent (does not start the terminal server) |
+| `-rc-server URL` | rendezvous base URL |
+| `-rc-token TOKEN` | tunnel token (otherwise saved/prompted) |
+| `-rc-target HOST:PORT` | local termulaa to splice to (default `127.0.0.1:<port>`) |
+| `-rc-label NAME` | agent label shown on the rendezvous (default: hostname) |
+| `-rc-tunnels N` | pooled tunnel connections, 1–8 (default 4) |
+| `-rc-insecure` | skip TLS verification — dev-only, for self-signed rendezvous certs |
+
+See [SECURITY.md](SECURITY.md) for why this does not violate the
+loopback rule, and what the residual risks are.
+
 ## Why
 
 `ttyd` + `tmux` gets you "browser-rendered PTY with persistence," but
@@ -102,15 +153,17 @@ browser tab you leave open next to whatever you're building.
 ```
 build/build.sh       # cross-compile to dist/<os>/
 src/cmd/termulaa/    # Go sources + embedded ui/
+docs/                # rc-protocol.md — the remote-access protocol spec
 resources/plans/     # design docs
 resources/scripts/   # run + benchmark helpers
 resources/images/    # README screenshots + GIFs
 ```
 
-Two Go dependencies: [`creack/pty`](https://github.com/creack/pty) and
-[`gorilla/websocket`](https://github.com/gorilla/websocket). Frontend is
-vendored — Alpine.js, Twind, xterm.js + addons — no npm, no bundler, no
-build step.
+Three Go dependencies: [`creack/pty`](https://github.com/creack/pty),
+[`gorilla/websocket`](https://github.com/gorilla/websocket), and
+[`xtaci/smux`](https://github.com/xtaci/smux) (multiplexes remote-access
+viewers over the `-rc` tunnel pool). Frontend is vendored — Alpine.js,
+Twind, xterm.js + addons — no npm, no bundler, no build step.
 
 ## Runtime state
 

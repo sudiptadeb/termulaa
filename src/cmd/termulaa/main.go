@@ -129,9 +129,39 @@ func saveFullConfig(cfg *FullConfig) error {
 
 func main() {
 	portFlag := flag.Int("port", 0, "listen port (overrides config)")
+	rcFlag := flag.Bool("rc", false, "run the remote-access reverse tunnel agent (dials out to a rendezvous server; see docs/rc-protocol.md)")
+	rcServer := flag.String("rc-server", "", "rendezvous base URL for -rc (default from ~/.termulaa/rc.json, else the reference rendezvous)")
+	rcTarget := flag.String("rc-target", "", "local termulaa address for -rc to splice to (default 127.0.0.1:<port>)")
+	rcToken := flag.String("rc-token", "", "tunnel token for -rc (default from ~/.termulaa/rc.json; prompts if unset)")
+	rcLabel := flag.String("rc-label", "", "agent label shown on the rendezvous for -rc (default: hostname)")
+	rcTunnels := flag.Int("rc-tunnels", 0, "pooled tunnel connections for -rc, 1-8 (default 4)")
+	rcInsecure := flag.Bool("rc-insecure", false, "skip TLS verification for -rc dials (dev only; persisted to ~/.termulaa/rc.json)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	// Remote-control agent mode. This is a separate, dumb byte pump — it does
+	// NOT start the terminal server and does NOT relax the loopback bind. See
+	// tunnel.go and SECURITY.md.
+	if *rcFlag {
+		var insecure *bool
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "rc-insecure" {
+				insecure = rcInsecure
+			}
+		})
+		if err := runTunnelAgent(TunnelConfig{
+			Server:   *rcServer,
+			Target:   *rcTarget,
+			Token:    *rcToken,
+			Label:    *rcLabel,
+			Tunnels:  *rcTunnels,
+			Insecure: insecure,
+		}); err != nil {
+			log.Fatalf("rc: %v", err)
+		}
+		return
+	}
 
 	// Load config
 	fullCfg := loadFullConfig()

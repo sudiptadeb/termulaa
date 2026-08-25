@@ -39,6 +39,44 @@ and commented accordingly.
 
 Until all five are in place, keep the loopback bind.
 
+## Remote access (`-rc`) and the loopback rule
+
+`termulaa -rc` runs a **reverse tunnel agent** (see
+[docs/rc-protocol.md](docs/rc-protocol.md)). This does **not** violate
+the loopback rule:
+
+- The terminal server's bind is untouched — still `127.0.0.1` only.
+- No inbound port is opened anywhere. The agent only dials *out*
+  (WebSocket over TLS) to a rendezvous server, and browser traffic
+  arrives as multiplexed streams inside those outbound connections.
+- The rendezvous rewrites `Host`/`Origin` to loopback values, so the
+  local termulaa still enforces its DNS-rebinding guard unchanged.
+- The agent is a byte pump with no HTTP parsing and no terminal
+  knowledge; `termulaa -rc` never starts the terminal server.
+
+**The token is the capability.** Anyone holding a valid tunnel token can
+attach an agent, and anyone the rendezvous admits to the viewer side of
+that agent gets your terminal — i.e. arbitrary command execution as your
+user. Treat tokens like SSH private keys. They expire by design and can
+be revoked at the rendezvous pairing page; expiry is discovered at
+connect time (the token is opaque to termulaa and never parsed).
+
+Residual risks, accepted knowingly when you opt in to `-rc`:
+
+- **Rendezvous compromise or malice** — the rendezvous terminates TLS
+  and can open streams to your terminal at will. Only tunnel to a
+  rendezvous you trust as much as the machine itself (ideally your own).
+- **Token leakage** — a leaked token is remote shell access until it
+  expires or is revoked.
+- **`-rc-insecure`** disables TLS certificate verification on the
+  agent's dials. It exists for development against self-signed
+  rendezvous certs only; with it set, an on-path attacker can become
+  your rendezvous. Never use it in production. It persists in
+  `~/.termulaa/rc.json`; remove it with `-rc-insecure=false`.
+
+Not running `-rc` (the default) leaves the historical posture exactly as
+described above.
+
 ## Reporting a vulnerability
 
 This is a personal project and has no paid security team. Best-effort
