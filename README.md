@@ -108,6 +108,17 @@ when); when one does, the agent stops with a message pointing at
 `<rendezvous>/rc`. Mint a fresh token and run `-rc` again with
 `-rc-token <new token>`.
 
+### From a phone
+
+The terminal UI is usable from a phone (e.g. over the reverse tunnel).
+On touch devices a key bar docks above the on-screen keyboard with the
+keys mobile keyboards lack: Tab, Esc, Ctrl, Alt, arrows, and characters
+like `|` `~` and backtick. Ctrl and Alt are sticky — tap for one-shot,
+double-tap to lock — and arrows send the right sequences inside
+full-screen programs like vim. The terminal resizes to stay clear of
+the keyboard, and the bar can be hidden (and stays hidden) if you use a
+hardware keyboard.
+
 Flags:
 
 | Flag | Meaning |

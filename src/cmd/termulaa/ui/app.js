@@ -160,6 +160,7 @@
     // Wire terminal input, but defer until scrollback replay completes.
     term.onData(function(data) {
       if (pane.replayingScrollback) return;
+      data = keybarTransform(data);
       if (pane.ws && pane.ws.readyState === WebSocket.OPEN) {
         pane.ws.send(new TextEncoder().encode(data));
       }
@@ -994,6 +995,232 @@
     });
   }
 
+  // ── Mobile Key Bar ─────────────────────────────────────────────────────────
+  // Android's soft keyboard has no Tab / Esc / Ctrl / arrows, so touch devices
+  // get an accessory key row docked above the keyboard (the Termux model).
+
+  var KEYBAR_KEYS = [
+    { label: 'Tab', key: 'Tab', keyCode: 9, code: 'Tab' },
+    { label: 'Esc', key: 'Escape', keyCode: 27, code: 'Escape' },
+    { label: 'Ctrl', mod: 'ctrl' },
+    { label: '↑', aria: 'Arrow up', key: 'ArrowUp', keyCode: 38, code: 'ArrowUp' },
+    { label: '↓', aria: 'Arrow down', key: 'ArrowDown', keyCode: 40, code: 'ArrowDown' },
+    { label: '←', aria: 'Arrow left', key: 'ArrowLeft', keyCode: 37, code: 'ArrowLeft' },
+    { label: '→', aria: 'Arrow right', key: 'ArrowRight', keyCode: 39, code: 'ArrowRight' },
+    { label: 'Alt', mod: 'alt' },
+    { label: '|', text: '|' },
+    { label: '~', text: '~' },
+    { label: '/', text: '/' },
+    { label: '-', text: '-' },
+    { label: '_', text: '_' },
+    { label: '`', text: '`' },
+  ];
+
+  // Modifier state: 0 = off, 1 = one-shot (applies to next key), 2 = locked.
+  var keybarMods = { ctrl: 0, alt: 0 };
+  var keybarModBtns = { ctrl: null, alt: null };
+  var keybarModLastTap = { ctrl: 0, alt: 0 };
+  var keybarSynthetic = false;
+
+  function setKeybarMod(name, state) {
+    keybarMods[name] = state;
+    var btn = keybarModBtns[name];
+    if (!btn) return;
+    btn.classList.toggle('mod-oneshot', state === 1);
+    btn.classList.toggle('mod-locked', state === 2);
+    btn.setAttribute('aria-pressed', state ? 'true' : 'false');
+  }
+
+  function tapKeybarMod(name) {
+    var now = Date.now();
+    var state = keybarMods[name];
+    if (state === 0) {
+      setKeybarMod(name, 1);
+    } else if (state === 1) {
+      // Quick second tap locks; a slow tap while latched releases.
+      setKeybarMod(name, now - keybarModLastTap[name] < 350 ? 2 : 0);
+    } else {
+      setKeybarMod(name, 0);
+    }
+    keybarModLastTap[name] = now;
+  }
+
+  function releaseOneshotMods() {
+    if (keybarMods.ctrl === 1) setKeybarMod('ctrl', 0);
+    if (keybarMods.alt === 1) setKeybarMod('alt', 0);
+  }
+
+  function keybarApplyMods(data) {
+    if (keybarMods.ctrl) {
+      if (data === '?') data = '\x7f';
+      else if (data === ' ') data = '\x00';
+      else {
+        var c = data.toUpperCase().charCodeAt(0);
+        if (c >= 64 && c < 128) data = String.fromCharCode(c & 0x1f);
+      }
+    }
+    if (keybarMods.alt) data = '\x1b' + data;
+    releaseOneshotMods();
+    return data;
+  }
+
+  // Hooked into term.onData so a latched Ctrl/Alt also applies to keys typed
+  // on the native keyboard (soft-keyboard input arrives as data, not keydown).
+  function keybarTransform(data) {
+    if (keybarSynthetic) return data;
+    if (!keybarMods.ctrl && !keybarMods.alt) return data;
+    if (data.length !== 1) {
+      releaseOneshotMods();
+      return data;
+    }
+    return keybarApplyMods(data);
+  }
+
+  // Dispatch a synthetic keydown at xterm's hidden textarea instead of sending
+  // hardcoded bytes: xterm's own evaluateKeyboardEvent then emits the
+  // mode-correct sequence (\x1b[A vs \x1bOA under application cursor mode,
+  // \x1b[1;5A with Ctrl, ...). xterm 5.x maps keys by legacy keyCode, which
+  // the KeyboardEvent constructor won't set — define it on the instance.
+  function keybarDispatchKey(def) {
+    var pane = activePane;
+    if (!pane || pane.disposed || pane.replayingScrollback || !pane.term.textarea) return;
+    var ev = new KeyboardEvent('keydown', {
+      key: def.key,
+      code: def.code,
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: keybarMods.ctrl !== 0,
+      altKey: keybarMods.alt !== 0,
+    });
+    Object.defineProperty(ev, 'keyCode', { value: def.keyCode });
+    Object.defineProperty(ev, 'which', { value: def.keyCode });
+    keybarSynthetic = true;
+    try {
+      pane.term.textarea.dispatchEvent(ev);
+    } finally {
+      keybarSynthetic = false;
+    }
+    releaseOneshotMods();
+  }
+
+  function keybarSendText(text) {
+    var pane = activePane;
+    if (!pane || pane.disposed || pane.replayingScrollback) return;
+    var data = keybarApplyMods(text);
+    if (pane.ws && pane.ws.readyState === WebSocket.OPEN) {
+      pane.ws.send(new TextEncoder().encode(data));
+    }
+  }
+
+  // preventDefault on pointerdown/mousedown so a tap never moves focus off
+  // xterm's textarea — a blur would make Android dismiss the keyboard on
+  // every press. Acting on click (not down) keeps the row touch-scrollable.
+  function wireKeybarButton(btn, handler) {
+    btn.addEventListener('pointerdown', function(e) { e.preventDefault(); });
+    btn.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      handler();
+      var pane = activePane;
+      if (pane && !pane.disposed && pane.term.textarea &&
+          document.activeElement !== pane.term.textarea) {
+        pane.term.focus();
+      }
+    });
+  }
+
+  function keybarButton(def) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'keybar-key' + (def.mod ? ' keybar-mod' : '');
+    btn.textContent = def.label;
+    if (def.aria) btn.setAttribute('aria-label', def.aria);
+    if (def.mod) {
+      btn.setAttribute('aria-pressed', 'false');
+      keybarModBtns[def.mod] = btn;
+      wireKeybarButton(btn, function() { tapKeybarMod(def.mod); });
+    } else if (def.text) {
+      wireKeybarButton(btn, function() { keybarSendText(def.text); });
+    } else {
+      wireKeybarButton(btn, function() { keybarDispatchKey(def); });
+    }
+    return btn;
+  }
+
+  function setKeybarHidden(hidden, persist) {
+    document.body.classList.toggle('keybar-hidden', hidden);
+    if (hidden) {
+      setKeybarMod('ctrl', 0);
+      setKeybarMod('alt', 0);
+    }
+    if (persist) {
+      try {
+        localStorage.setItem('keybarHidden', hidden ? '1' : '0');
+      } catch (e) { /* private mode */ }
+    }
+    refitAll();
+  }
+
+  var keybarRefitTimer = null;
+
+  // Track the visual viewport so the bar docks directly above the on-screen
+  // keyboard and the terminal shrinks out from under it. The refit (which
+  // triggers the PTY resize message) is debounced so a keyboard animation
+  // doesn't spam resizes.
+  function updateKeybarViewport() {
+    var vv = window.visualViewport;
+    var h = vv ? vv.height : window.innerHeight;
+    var top = vv ? vv.offsetTop : 0;
+    document.documentElement.style.setProperty('--vv-h', h + 'px');
+    document.documentElement.style.setProperty('--vv-top', top + 'px');
+    if (keybarRefitTimer) clearTimeout(keybarRefitTimer);
+    keybarRefitTimer = setTimeout(function() {
+      keybarRefitTimer = null;
+      refitAll();
+    }, 150);
+  }
+
+  function initKeybar() {
+    if (!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) return;
+    document.body.classList.add('touch-ui');
+
+    var bar = document.createElement('div');
+    bar.id = 'keybar';
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', 'Terminal keys');
+    for (var i = 0; i < KEYBAR_KEYS.length; i++) {
+      bar.appendChild(keybarButton(KEYBAR_KEYS[i]));
+    }
+    var hideBtn = document.createElement('button');
+    hideBtn.type = 'button';
+    hideBtn.className = 'keybar-key keybar-hide';
+    hideBtn.textContent = '✕';
+    hideBtn.setAttribute('aria-label', 'Hide key bar');
+    wireKeybarButton(hideBtn, function() { setKeybarHidden(true, true); });
+    bar.appendChild(hideBtn);
+    document.body.appendChild(bar);
+
+    var showBtn = document.createElement('button');
+    showBtn.type = 'button';
+    showBtn.id = 'keybar-show';
+    showBtn.textContent = '⌨';
+    showBtn.setAttribute('aria-label', 'Show key bar');
+    wireKeybarButton(showBtn, function() { setKeybarHidden(false, true); });
+    document.body.appendChild(showBtn);
+
+    var hidden = false;
+    try {
+      hidden = localStorage.getItem('keybarHidden') === '1';
+    } catch (e) { /* private mode */ }
+    setKeybarHidden(hidden, false);
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateKeybarViewport);
+      window.visualViewport.addEventListener('scroll', updateKeybarViewport);
+    }
+    updateKeybarViewport();
+  }
+
   // ── Init ────────────────────────────────────────────────────────────────────
 
   async function init() {
@@ -1031,6 +1258,9 @@
 
     // Window resize
     window.addEventListener('resize', onWindowResize);
+
+    // Mobile key bar (touch devices only)
+    initKeybar();
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
