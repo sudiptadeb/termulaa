@@ -140,3 +140,57 @@ body.touch-ui #terminal-container {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
+
+/* ── Shortcuts Guide ──────────────────────────────────────────────────── */
+#shortcuts-hint {
+  position: fixed;
+  right: 10px;
+  bottom: 10px;
+  z-index: 400;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #555;
+  border-radius: 50%;
+  background: rgba(45, 45, 45, 0.7);
+  color: #ccc;
+  font-size: 13px;
+  line-height: 22px;
+  cursor: pointer;
+  opacity: 0.25;
+  transition: opacity 0.15s;
+}
+#shortcuts-hint:hover,
+#shortcuts-hint:focus-visible { opacity: 1; }
+/* On touch the guide opens from the key bar's ? instead. */
+body.touch-ui #shortcuts-hint { display: none; }
+
+.shortcuts-box {
+  outline: none; /* dialog gets programmatic focus; a ring here is noise */
+  text-align: left;
+  padding: 24px 28px;
+  width: min(400px, calc(100vw - 32px));
+}
+.shortcuts-box p { margin: 12px 0 0; font-size: 12px; color: #888; }
+.shortcuts-box code { color: #aaa; }
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 5px 0;
+  font-size: 14px;
+  color: #ccc;
+}
+.shortcut-row kbd {
+  padding: 2px 7px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #3c3c3c;
+  color: #e0e0e0;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.keybar-help { margin-left: auto; min-width: 32px; color: #888; }
+.keybar-help + .keybar-hide { margin-left: 0; }

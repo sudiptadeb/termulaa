@@ -25,6 +25,19 @@
     </div>
   </div>
 
+  <!-- Shortcuts guide -->
+  <button id="shortcuts-hint" type="button" aria-label="Keyboard shortcuts">?</button>
+  <div id="shortcuts-overlay" style="display:none">
+    <div class="modal-overlay">
+      <div class="modal-box shortcuts-box" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
+        <h2>Keyboard Shortcuts</h2>
+        <div id="shortcuts-list"></div>
+        <p id="shortcuts-shell-note" style="display:none">These use Ctrl, so Ctrl+D (shell EOF) and Ctrl+W (word erase) go to termulaa instead — rebind if you need them.</p>
+        <p>Customise via the <code>terminalKeybindings</code> localStorage key.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Takeover banner -->
   <div id="takeover-banner" style="display:none">
     <div class="takeover-content">
@@ -38,6 +51,7 @@
   <script src="lib/xterm-addon-webgl.min.js"></script>
   <script src="lib/xterm-addon-unicode11.min.js"></script>
   <script src="themes.js"></script>
+  <script src="keybindings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

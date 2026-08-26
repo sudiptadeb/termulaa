@@ -748,26 +748,14 @@
 
   // ── Keyboard Shortcuts ──────────────────────────────────────────────────────
 
-  var isMac = navigator.platform.indexOf('Mac') !== -1;
+  // Defaults, localStorage merge, and label formatting live in
+  // keybindings.js, shared with settings.html so displays can't drift.
+  var isMac = window.TerminalKeybindings.isMac;
 
-  var keybindings = {
-    splitVertical:   { mod: true, shift: false, key: 'd' },
-    splitHorizontal: { mod: true, shift: true,  key: 'd' },
-    closePane:       { mod: true, shift: false, key: 'w' },
-    nextPane:        { mod: true, shift: false, key: ']' },
-    prevPane:        { mod: true, shift: false, key: '[' },
-  };
+  var keybindings = {};
 
   function loadKeybindings() {
-    try {
-      var stored = localStorage.getItem('terminalKeybindings');
-      if (stored) {
-        var custom = JSON.parse(stored);
-        for (var action in custom) {
-          keybindings[action] = custom[action];
-        }
-      }
-    } catch (e) { /* ignore */ }
+    keybindings = window.TerminalKeybindings.load();
   }
 
   function matchesKeybinding(e, kb) {
@@ -793,6 +781,20 @@
   }
 
   function handleKeyboardShortcuts(e) {
+    // Registered with capture:true, so this runs before xterm's own keydown
+    // handler on its textarea — preventDefault keeps the key from the PTY.
+    if (shortcutsOverlayOpen()) {
+      if (e.key === 'Escape' || matchesKeybinding(e, keybindings.showShortcuts)) {
+        e.preventDefault();
+        closeShortcutsOverlay();
+      }
+      return;
+    }
+    if (matchesKeybinding(e, keybindings.showShortcuts)) {
+      e.preventDefault();
+      openShortcutsOverlay();
+      return;
+    }
     if (matchesKeybinding(e, keybindings.splitVertical)) {
       e.preventDefault();
       if (activePane) splitPane(activePane, 'vertical');
@@ -817,6 +819,80 @@
       e.preventDefault();
       cyclePanes(-1);
       return;
+    }
+  }
+
+  // ── Shortcuts Overlay ───────────────────────────────────────────────────────
+
+  function shortcutsOverlayOpen() {
+    var el = document.getElementById('shortcuts-overlay');
+    return !!el && el.style.display !== 'none';
+  }
+
+  // On Linux/Windows the modifier is Ctrl, so plain Ctrl+D / Ctrl+W shadow
+  // the shell's EOF and word-erase. Only worth a line when actually bound.
+  function shadowsShellKeys() {
+    if (isMac) return false;
+    for (var action in keybindings) {
+      var kb = keybindings[action];
+      if (kb && kb.mod && !kb.shift && !kb.alt && (kb.key === 'd' || kb.key === 'w')) return true;
+    }
+    return false;
+  }
+
+  // Rendered on every open so a rebind via terminalKeybindings shows through.
+  function renderShortcutsList() {
+    var tk = window.TerminalKeybindings;
+    var list = document.getElementById('shortcuts-list');
+    list.textContent = '';
+    for (var action in tk.labels) {
+      var label = tk.format(keybindings[action]);
+      if (!label) continue;
+      var row = document.createElement('div');
+      row.className = 'shortcut-row';
+      var name = document.createElement('span');
+      name.textContent = tk.labels[action];
+      var kbd = document.createElement('kbd');
+      kbd.textContent = label;
+      row.appendChild(name);
+      row.appendChild(kbd);
+      list.appendChild(row);
+    }
+    var note = document.getElementById('shortcuts-shell-note');
+    if (note) note.style.display = shadowsShellKeys() ? '' : 'none';
+  }
+
+  function openShortcutsOverlay() {
+    renderShortcutsList();
+    var el = document.getElementById('shortcuts-overlay');
+    el.style.display = '';
+    // Take focus off xterm so keystrokes pause while the guide is up.
+    var box = el.querySelector('.modal-box');
+    if (box) box.focus();
+  }
+
+  function closeShortcutsOverlay() {
+    document.getElementById('shortcuts-overlay').style.display = 'none';
+    if (activePane) activePane.term.focus();
+  }
+
+  function toggleShortcutsOverlay() {
+    if (shortcutsOverlayOpen()) closeShortcutsOverlay();
+    else openShortcutsOverlay();
+  }
+
+  function initShortcutsUI() {
+    var hint = document.getElementById('shortcuts-hint');
+    if (hint) {
+      var label = window.TerminalKeybindings.format(keybindings.showShortcuts);
+      hint.title = 'Keyboard shortcuts' + (label ? ' (' + label + ')' : '');
+      hint.addEventListener('click', toggleShortcutsOverlay);
+    }
+    var overlay = document.getElementById('shortcuts-overlay');
+    if (overlay) {
+      overlay.querySelector('.modal-overlay').addEventListener('mousedown', function(e) {
+        if (e.target === e.currentTarget) closeShortcutsOverlay();
+      });
     }
   }
 
@@ -1192,6 +1268,22 @@
     for (var i = 0; i < KEYBAR_KEYS.length; i++) {
       bar.appendChild(keybarButton(KEYBAR_KEYS[i]));
     }
+    // On touch the fixed-corner hint would collide with the bar / keyboard,
+    // so the shortcut guide lives here instead (see body.touch-ui CSS).
+    var helpBtn = document.createElement('button');
+    helpBtn.type = 'button';
+    helpBtn.className = 'keybar-key keybar-help';
+    helpBtn.textContent = '?';
+    helpBtn.setAttribute('aria-label', 'Keyboard shortcuts');
+    helpBtn.addEventListener('pointerdown', function(e) { e.preventDefault(); });
+    helpBtn.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    // Not wireKeybarButton: the overlay should keep focus, not the terminal.
+    helpBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      toggleShortcutsOverlay();
+    });
+    bar.appendChild(helpBtn);
+
     var hideBtn = document.createElement('button');
     hideBtn.type = 'button';
     hideBtn.className = 'keybar-key keybar-hide';
@@ -1232,6 +1324,7 @@
     }
 
     loadKeybindings();
+    initShortcutsUI();
     await loadServerSettings();
 
     // Step 1: Connect tab WS and wait for ownership resolution.

@@ -5,6 +5,7 @@
   <base href="/">
   <title>termulaa — Settings</title>
   <script src="lib/twind.min.js"></script>
+  <script src="keybindings.js"></script>
   <script defer src="lib/alpine.min.js"></script>
 </head>
 <body class="bg-gray-900 text-gray-200 min-h-screen">
@@ -104,15 +105,37 @@
       </div>
     </section>
 
+    <!-- Keyboard Shortcuts -->
+    <section class="mb-8">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4 pb-2 border-b border-gray-800">Keyboard Shortcuts</h2>
+      <div class="space-y-2">
+        <template x-for="s in shortcuts" :key="s.name">
+          <div class="flex items-center justify-between">
+            <span x-text="s.name"></span>
+            <kbd class="px-2 py-0.5 text-xs font-mono text-gray-200 bg-gray-800 border border-gray-700 rounded" x-text="s.label"></kbd>
+          </div>
+        </template>
+        <p class="text-xs text-gray-500 pt-2">Rebind via the <code class="text-gray-400">terminalKeybindings</code> localStorage key; this list reflects your current bindings.</p>
+      </div>
+    </section>
+
     <!-- Save status -->
     <div x-show="saved" x-transition class="text-center text-sm text-green-500">Settings saved</div>
   </div>
 
   <script>
   function settingsPage() {
+    var tk = window.TerminalKeybindings;
+    var bindings = tk.load();
+    var shortcuts = [];
+    for (var action in tk.labels) {
+      var label = tk.format(bindings[action]);
+      if (label) shortcuts.push({ name: tk.labels[action], label: label });
+    }
     return {
       settings: {},
       saved: false,
+      shortcuts: shortcuts,
       async init() {
         try {
           const r = await fetch('api/settings');

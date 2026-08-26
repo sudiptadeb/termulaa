@@ -264,7 +264,10 @@ browser tab you leave open next to whatever you're building.
 
 - **Tabs + binary pane splits** — layout is first-class, persisted per
   tab. `Cmd/Ctrl+D` splits vertically, `Cmd/Ctrl+Shift+D` splits
-  horizontally.
+  horizontally, `Cmd/Ctrl+W` closes a pane, `Cmd/Ctrl+]` / `Cmd/Ctrl+[`
+  cycle focus. `Cmd/Ctrl+/` (or the `?` in the corner) shows the in-app
+  shortcut guide; rebind any of them via the `terminalKeybindings`
+  localStorage key.
 - **Dead-session revival** — if the PTY exited, the on-disk scrollback
   replays and a new shell spawns in the last-known cwd.
 - **Per-session CWD tracking** — follows `/proc/<pid>/cwd` on Linux,
