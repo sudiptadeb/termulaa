@@ -67,6 +67,26 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         run: bash build/build.sh termulaa "${TAG#v}"
 
+
+      # The Android app ships with every release: built from android/, signed
+      # with the committed sideload keystore (install-continuity only — see
+      # android/README.md), and uploaded under both a versioned name and the
+      # stable "termulaa.apk" that releases/latest/download links point at.
+      - uses: actions/setup-java@v4
+        if: steps.rel.outputs.release == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build Android app
+        if: steps.rel.outputs.release == 'true'
+        run: |
+          # AGP downloads any SDK component the runner image lacks, which
+          # requires the licenses to be accepted up front.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          cd android
+          ./gradlew --no-daemon :app:assembleRelease
+
       - name: Rename release assets
         if: steps.rel.outputs.release == 'true'
         env:
@@ -78,6 +98,8 @@ jobs:
               cp "dist/$os/termulaa-$arch-$TAG" "release/termulaa-$os-$arch-$TAG"
             done
           done
+          cp android/app/build/outputs/apk/release/app-release.apk "release/termulaa-android-$TAG.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "release/termulaa.apk"
           ls -la release/
 
       - name: Create release and upload binaries
