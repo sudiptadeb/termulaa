@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- AAPT2 only links <adaptive-icon> resources from a -v26 qualified
+         folder, even with minSdk 26 — renaming to mipmap-anydpi breaks
+         resource linking, so the "obsolete" qualifier is load-bearing. -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+</lint>

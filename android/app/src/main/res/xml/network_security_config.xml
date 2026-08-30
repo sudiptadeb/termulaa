@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is off globally: self-hosted plain-http servers are unsupported in
+  v1 (documented in README). The only exceptions are loopback / the emulator
+  host alias, so a developer can point the app at a memd instance on the same
+  machine. Arbitrary LAN IPs over http are intentionally NOT permitted.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

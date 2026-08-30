@@ -121,7 +121,18 @@ when); when one does, the agent stops with a message pointing at
 
 ### From a phone
 
-The terminal UI is usable from a phone (e.g. over the reverse tunnel).
+There is a native Android app in [`android/`](android/): it lists your
+connected machines from the rendezvous, opens their terminals, and —
+the main point — notifies you when a session produces output while you
+are away (useful when long-running agents work on remote machines).
+Every release ships the APK as a sideloadable asset; grab
+`termulaa.apk` from the
+[latest release](https://github.com/sudiptadeb/termulaa/releases/latest).
+It signs in with your rendezvous account and needs a path-mode
+rendezvous (the default).
+
+The terminal UI itself is also usable straight from a phone browser
+(e.g. over the reverse tunnel).
 On touch devices a key bar docks above the on-screen keyboard with the
 keys mobile keyboards lack: Tab, Esc, Ctrl, Alt, arrows, and characters
 like `|` `~` and backtick. Ctrl and Alt are sticky — tap for one-shot,
