@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLayoutMatchesSessionSet(t *testing.T) {
 	layout := &LayoutNode{
@@ -70,5 +73,53 @@ func TestClosePaneInLayoutReportsTargetFound(t *testing.T) {
 	}
 	if unchanged != layout {
 		t.Fatal("expected layout pointer to remain unchanged")
+	}
+}
+
+func TestTabInfoLastOutputAggregatesMax(t *testing.T) {
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+
+	// A live pane with older output and a dead pane (shell exited) holding
+	// the most recent output — the dead pane's time must win.
+	live := &Session{ID: "live", Alive: true}
+	live.lastOutput.Store(older.UnixNano())
+	dead := &Session{ID: "dead", Alive: false}
+	dead.lastOutput.Store(newer.UnixNano())
+
+	tab := &Tab{
+		ID:   "t1",
+		Name: "test",
+		Layout: &LayoutNode{
+			Type:      "split",
+			Direction: "v",
+			First:     &LayoutNode{Type: "pane", SessionID: "live"},
+			Second:    &LayoutNode{Type: "pane", SessionID: "dead"},
+		},
+	}
+
+	info := tab.Info(map[string]*Session{"live": live, "dead": dead})
+	if !info.LastOutput.Equal(newer) {
+		t.Fatalf("LastOutput = %v, want %v (max across panes)", info.LastOutput, newer)
+	}
+}
+
+func TestTabInfoLastOutputZeroWhenNever(t *testing.T) {
+	tab := &Tab{
+		ID:     "t1",
+		Name:   "test",
+		Layout: &LayoutNode{Type: "pane", SessionID: "a"},
+	}
+
+	// Session exists but never produced output.
+	info := tab.Info(map[string]*Session{"a": {ID: "a", Alive: true}})
+	if !info.LastOutput.IsZero() {
+		t.Fatalf("LastOutput = %v, want zero time", info.LastOutput)
+	}
+
+	// Session missing from the registry entirely.
+	info = tab.Info(map[string]*Session{})
+	if !info.LastOutput.IsZero() {
+		t.Fatalf("LastOutput = %v, want zero time for missing session", info.LastOutput)
 	}
 }

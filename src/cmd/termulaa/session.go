@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -193,6 +194,11 @@ type Session struct {
 	pty        *os.File
 	scrollback *RingBuffer
 
+	// lastOutput is the unix-nanosecond time of the most recent PTY output
+	// byte (0 = never). Kept as an atomic so readPump can stamp it without
+	// holding mu and API readers see a race-free value.
+	lastOutput atomic.Int64
+
 	mu      sync.Mutex
 	clients []*wsClient
 	done    chan struct{}
@@ -301,7 +307,9 @@ func (s *Session) readPump() {
 
 			s.scrollback.Write(data)
 			s.Broadcast(data)
-			s.LastActive = time.Now()
+			now := time.Now()
+			s.LastActive = now
+			s.lastOutput.Store(now.UnixNano())
 		}
 		if err != nil {
 			break
@@ -515,6 +523,16 @@ func (s *Session) Meta() SessionMeta {
 		CreatedAt:  s.CreatedAt,
 		LastActive: s.LastActive,
 	}
+}
+
+// LastOutput returns the wall-clock time of the most recent PTY output byte.
+// It returns the zero time.Time if the session has never produced output.
+func (s *Session) LastOutput() time.Time {
+	ns := s.lastOutput.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 // Done returns a channel that closes when the session's shell exits.

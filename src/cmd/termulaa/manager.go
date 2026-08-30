@@ -147,6 +147,12 @@ func (m *SessionManager) LoadState() {
 		// The done channel should be closed for dead sessions.
 		close(s.done)
 
+		// Seed the last-output stamp from LastActive so a restart doesn't
+		// zero the "new output" signal for restored sessions.
+		if !meta.LastActive.IsZero() {
+			s.lastOutput.Store(meta.LastActive.UnixNano())
+		}
+
 		// Load scrollback if available.
 		sbPath := m.scrollbackPath(id)
 		if err := s.scrollback.LoadFrom(sbPath); err != nil && !os.IsNotExist(err) {

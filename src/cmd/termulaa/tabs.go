@@ -30,6 +30,9 @@ type TabInfo struct {
 	PaneCount  int       `json:"pane_count"`
 	Alive      bool      `json:"alive"`
 	LastActive time.Time `json:"last_active"`
+	// LastOutput is the most recent PTY output time across all panes in the
+	// tab, dead sessions included. Zero when no pane ever produced output.
+	LastOutput time.Time `json:"last_output"`
 }
 
 // NewTab creates a tab with a single-pane layout backed by the given session.
@@ -69,16 +72,23 @@ func (t *Tab) HasSession(sessionID string) bool {
 	return found
 }
 
-// Info returns a TabInfo snapshot. It checks whether any pane's session is alive.
+// Info returns a TabInfo snapshot. It checks whether any pane's session is
+// alive and aggregates the most recent PTY output time across all panes.
 func (t *Tab) Info(sessions map[string]*Session) TabInfo {
 	paneCount := 0
 	alive := false
+	var lastOutput time.Time
 
 	walkLayout(t.Layout, func(node *LayoutNode) {
 		if node.Type == "pane" {
 			paneCount++
-			if s, ok := sessions[node.SessionID]; ok && s.Alive {
-				alive = true
+			if s, ok := sessions[node.SessionID]; ok {
+				if s.Alive {
+					alive = true
+				}
+				if out := s.LastOutput(); out.After(lastOutput) {
+					lastOutput = out
+				}
 			}
 		}
 	})
@@ -89,6 +99,7 @@ func (t *Tab) Info(sessions map[string]*Session) TabInfo {
 		PaneCount:  paneCount,
 		Alive:      alive,
 		LastActive: t.LastActive,
+		LastOutput: lastOutput,
 	}
 }
 
