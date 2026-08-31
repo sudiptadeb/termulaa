@@ -56,6 +56,8 @@ fun TermulaaNav(
     versionName: String,
     pendingMachineId: String?,
     onDeepLinkConsumed: () -> Unit,
+    pendingPairUri: String? = null,
+    onPairLinkConsumed: () -> Unit = {},
 ) {
     val nav = rememberNavController()
     val context = LocalContext.current
@@ -68,6 +70,14 @@ fun TermulaaNav(
         }
     }
 
+    // Pairing deep-link (termulaa://pair): make sure the Connect screen is up;
+    // its composable consumes the URI and decides prefill vs auto-redeem.
+    LaunchedEffect(pendingPairUri) {
+        if (pendingPairUri != null && nav.currentDestination?.route != Routes.CONNECT) {
+            nav.navigate(Routes.CONNECT) { launchSingleTop = true }
+        }
+    }
+
     NavHost(
         navController = nav,
         startDestination = if (startSignedIn) Routes.MACHINES else Routes.CONNECT,
@@ -75,18 +85,30 @@ fun TermulaaNav(
         composable(Routes.CONNECT) {
             val vm: ConnectViewModel = viewModel(initializer = { ConnectViewModel(graph) })
             val state by vm.state.collectAsState()
+            val onSignedIn = {
+                CheckWorker.schedule(context, 15)
+                nav.navigate(Routes.MACHINES) {
+                    popUpTo(Routes.CONNECT) { inclusive = true }
+                }
+            }
+            LaunchedEffect(pendingPairUri) {
+                if (pendingPairUri != null) {
+                    vm.applyPairLink(pendingPairUri, onSuccess = onSignedIn)
+                    onPairLinkConsumed()
+                }
+            }
             ConnectScreen(
                 busy = state.busy,
                 error = state.error,
-                initialServerUrl = graph.currentBase() ?: "https://memd.debkosh.com",
-            ) { url, user, pass ->
-                vm.connect(url, user, pass) {
-                    CheckWorker.schedule(context, 15)
-                    nav.navigate(Routes.MACHINES) {
-                        popUpTo(Routes.CONNECT) { inclusive = true }
-                    }
-                }
-            }
+                notice = state.notice,
+                initialServerUrl = state.prefillServer
+                    ?: graph.currentBase() ?: "https://memd.debkosh.com",
+                initialCode = state.prefillCode ?: "",
+                onPair = { url, code -> vm.pair(url, code, onSuccess = onSignedIn) },
+                onPasswordSignIn = { url, user, pass ->
+                    vm.connect(url, user, pass, onSuccess = onSignedIn)
+                },
+            )
         }
 
         composable(Routes.MACHINES) {
@@ -253,7 +275,9 @@ private fun PollWhileResumed(vm: MachinesViewModel) {
 
 private fun signOut(graph: AppGraph, nav: NavHostController, context: android.content.Context) {
     graph.scope.launch {
-        graph.client.clearAuth()
+        // Best-effort DELETE /api/app/tokens/self (keeps the dashboard's
+        // "paired phones" list honest), then the unconditional local wipe.
+        graph.client.signOut()
         graph.store.clearAll()
         graph.setBase(null)
         CheckWorker.cancel(context)

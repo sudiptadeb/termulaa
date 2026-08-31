@@ -21,6 +21,14 @@ data class LoginRequest(val username: String, val password: String)
 @Serializable
 data class ApiError(val error: String? = null)
 
+/** POST /api/app/redeem — pairing-code exchange (no auth). */
+@Serializable
+data class RedeemRequest(val code: String, val label: String)
+
+/** 200 body of /api/app/redeem: the long-lived revocable app token. */
+@Serializable
+data class RedeemResponse(val token: String? = null, val user: JsonObject? = null)
+
 @Serializable
 data class SessionAuth(val oidc_enabled: Boolean = false)
 

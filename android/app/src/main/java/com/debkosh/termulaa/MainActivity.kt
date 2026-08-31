@@ -16,16 +16,20 @@ class MainActivity : ComponentActivity() {
     /** Machine id from a tapped notification, consumed by the nav host. */
     private var pendingMachineId by mutableStateOf<String?>(null)
 
+    /** termulaa://pair deep-link URI, consumed by the Connect screen. */
+    private var pendingPairUri by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = AppGraph.get(this)
 
         pendingMachineId = extractMachineId(intent)
+        pendingPairUri = extractPairUri(intent)
 
         // One tiny synchronous read to pick the start destination; the prefs
         // file is a few hundred bytes.
-        val startSignedIn =
-            runBlocking { graph.store.serverUrlNow() } != null && graph.client.hasCredentials()
+        val startSignedIn = runBlocking { graph.store.serverUrlNow() } != null &&
+            (graph.client.hasAppToken() || graph.client.hasCredentials())
 
         val versionName = try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
@@ -41,6 +45,8 @@ class MainActivity : ComponentActivity() {
                     versionName = versionName,
                     pendingMachineId = pendingMachineId,
                     onDeepLinkConsumed = { pendingMachineId = null },
+                    pendingPairUri = pendingPairUri,
+                    onPairLinkConsumed = { pendingPairUri = null },
                 )
             }
         }
@@ -48,13 +54,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // singleTask: a notification tap while running lands here.
+        // singleTask: a notification tap or pairing link while running lands here.
         extractMachineId(intent)?.let { pendingMachineId = it }
+        extractPairUri(intent)?.let { pendingPairUri = it }
     }
 
     private fun extractMachineId(intent: Intent?): String? {
         if (intent?.action != ACTION_OPEN_MACHINE) return null
         return intent.getStringExtra(EXTRA_MACHINE_ID)?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * The raw termulaa://pair?... URI from a VIEW intent, or null. Parsing and
+     * the auto-redeem-vs-prefill decision live in core.PairLink (pure, tested);
+     * here we only recognize the scheme.
+     */
+    private fun extractPairUri(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_VIEW) return null
+        val data = intent.data ?: return null
+        return data.toString().takeIf { data.scheme == "termulaa" }
     }
 
     companion object {

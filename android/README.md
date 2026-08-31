@@ -22,10 +22,31 @@ Connect → Machines → Terminal.)*
 - **Terminal** — the full termulaa web UI (tabs, split panes, key bar) in a
   locked-down WebView sharing the memd session cookie. The app adds nothing
   inside the page.
-- **Transparent re-login** — the `memd_session` cookie expires roughly daily;
-  the app re-authenticates with your stored credentials and retries once,
-  automatically. Credentials and the cookie live in
-  EncryptedSharedPreferences; everything else in DataStore.
+- **Pairing-code sign-in** — the primary way in. Open the termulaa section of
+  your memd dashboard, tap *Pair the app*, and type (or tap) the short code
+  into the Connect screen. This works for **every** account type, including
+  Google/SSO sign-in, because the code is minted by your already-signed-in
+  dashboard. The code is single-use and expires after 5 minutes; case, dashes
+  and spaces don't matter. The dashboard also renders the code as a
+  `termulaa://pair?...` link — tapping it on the phone prefills and pairs in
+  one step (if the link is for a *different* server than the one you're
+  signed in to, the app prefills the form but waits for you to confirm the
+  switch, since pairing replaces the old sign-in).
+- **Transparent re-auth** — redeeming a code gives the app a long-lived,
+  revocable app token. The `memd_session` cookie expires roughly daily; the
+  app silently exchanges the token for a fresh cookie and retries once,
+  automatically. The token and cookie live in EncryptedSharedPreferences;
+  everything else in DataStore.
+- **Revocation from the dashboard** — every paired phone appears in the
+  dashboard's *Paired phones* list (label, paired date, last used) with a
+  revoke button. Revoking un-pairs that phone remotely: its next re-auth
+  fails and the app drops to the Connect screen with a plain "this phone was
+  un-paired" notice. Signing out in the app also revokes its own token
+  (best-effort), so the list stays honest.
+- **Password sign-in** (secondary, collapsed behind *Sign in with password
+  instead*) — for servers with local username/password accounts only; OIDC
+  accounts have no password, use pairing. This is the old v1.0 behavior:
+  stored credentials, automatic re-login on cookie expiry.
 
 Plain-`http://` servers are unsupported in v1 — the URL field requires
 `https`, except literal IPs / `localhost` for development (and the network
