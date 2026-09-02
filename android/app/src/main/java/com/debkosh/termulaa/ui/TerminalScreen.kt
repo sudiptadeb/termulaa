@@ -211,6 +211,19 @@ private fun createTerminalWebView(
         ViewGroup.LayoutParams.MATCH_PARENT,
     )
     wv.setBackgroundColor("#0F1115".toColorInt())
+    // Inside Compose, AndroidView children do not win view focus on their own:
+    // Compose keeps window focus at its level, the IME binds to ComposeView's
+    // empty input connection, and typed text dies in the keyboard's own strip
+    // while the terminal never sees a key. Make the WebView focusable in touch
+    // mode and re-claim focus on every touch so the IME binds to the WebView's
+    // input connection (which xterm.js's hidden textarea sits behind).
+    wv.isFocusable = true
+    wv.isFocusableInTouchMode = true
+    wv.setOnTouchListener { v, _ ->
+        if (!v.hasFocus()) v.requestFocus()
+        false // never consume: the page still gets the touch
+    }
+    wv.requestFocus()
     wv.settings.apply {
         // The termulaa UI is an xterm.js SPA: JS + DOM storage required.
         javaScriptEnabled = true
