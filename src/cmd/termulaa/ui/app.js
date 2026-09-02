@@ -136,6 +136,7 @@
     }
 
     term.open(el);
+    tameSoftKeyboard(term);
 
     var pane = {
       type: 'pane',
@@ -1139,6 +1140,25 @@
     if (keybarMods.alt) data = '\x1b' + data;
     releaseOneshotMods();
     return data;
+  }
+
+  // Android soft keyboards compose a whole word before committing it, so
+  // xterm emits nothing until a space or Enter ends the composition: you type
+  // a command and the terminal stays empty while the letters sit in the
+  // keyboard's suggestion strip. A terminal needs every keystroke on its own,
+  // and the url input mode is what turns the composing off — it drops
+  // autocorrect and suggestions, so each key commits immediately. Desktop
+  // browsers ignore inputmode entirely, and IME composition for languages
+  // that genuinely need it still works, since xterm keeps handling
+  // compositionend.
+  function tameSoftKeyboard(term) {
+    var ta = term.textarea;
+    if (!ta) return;
+    ta.setAttribute('inputmode', 'url');
+    ta.setAttribute('autocomplete', 'off');
+    ta.setAttribute('autocorrect', 'off');
+    ta.setAttribute('autocapitalize', 'none');
+    ta.setAttribute('spellcheck', 'false');
   }
 
   // Hooked into term.onData so a latched Ctrl/Alt also applies to keys typed
