@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -77,20 +78,61 @@ func (r *RingBuffer) Write(p []byte) (int, error) {
 
 // ReadAll returns data from oldest to newest.
 func (r *RingBuffer) ReadAll() []byte {
+	data, _ := r.readAll()
+	return data
+}
+
+// ReadReplay returns the buffer contents trimmed to a boundary a terminal
+// can safely start parsing from. A full ring has overwritten its oldest
+// bytes at an arbitrary offset, so the head may be the tail of an escape
+// sequence or of a multi-byte UTF-8 character; replaying that verbatim makes
+// the terminal swallow real text (a truncated CSI eats characters until its
+// final byte). See cleanReplayStart.
+func (r *RingBuffer) ReadReplay() []byte {
+	data, wrapped := r.readAll()
+	return cleanReplayStart(data, wrapped)
+}
+
+func (r *RingBuffer) readAll() ([]byte, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if !r.full {
 		out := make([]byte, r.pos)
 		copy(out, r.buf[:r.pos])
-		return out
+		return out, false
 	}
 
 	// Buffer is full: data from pos..end, then 0..pos
 	out := make([]byte, len(r.buf))
 	n := copy(out, r.buf[r.pos:])
 	copy(out[n:], r.buf[:r.pos])
-	return out
+	return out, true
+}
+
+// cleanReplayStart drops the unparseable head of a wrapped ring dump. It
+// skips UTF-8 continuation bytes, then everything before the first ESC: an
+// ESC always begins a fresh sequence (inside an OSC string it can only be the
+// ST terminator, which a parser treats as a harmless no-op), so parsing from
+// there is well-defined. Plain text with no ESC at all is cut at its first
+// newline instead. An unwrapped buffer started at byte zero of the session
+// and is returned unchanged.
+func cleanReplayStart(data []byte, wrapped bool) []byte {
+	if !wrapped || len(data) == 0 {
+		return data
+	}
+	i := 0
+	for i < len(data) && data[i]&0xC0 == 0x80 {
+		i++
+	}
+	data = data[i:]
+	if esc := bytes.IndexByte(data, 0x1b); esc >= 0 {
+		return data[esc:]
+	}
+	if nl := bytes.IndexByte(data, '\n'); nl >= 0 {
+		return data[nl+1:]
+	}
+	return data
 }
 
 // Len returns the current amount of data in the buffer.
@@ -140,10 +182,143 @@ func (r *RingBuffer) LoadFrom(path string) error {
 
 type wsClient struct {
 	conn       *websocket.Conn
-	send       chan []byte
 	done       chan struct{}
 	tabID      string
 	ownerToken string
+
+	// Outbound queue. PTY output is never dropped for a slow client: bytes
+	// are coalesced into a bounded backlog that writePump drains, and a
+	// client that cannot keep up within maxClientBacklog is disconnected
+	// so it reconnects and resyncs from a fresh replay. Dropping arbitrary
+	// chunks instead would leave the terminal parsing a torn escape stream
+	// until the next full redraw.
+	outMu    sync.Mutex
+	out      []outFrame
+	outBytes int
+	notify   chan struct{}
+	overflow bool
+}
+
+// outFrame is one queued WebSocket message: binary PTY bytes or a JSON
+// control message (text).
+type outFrame struct {
+	text bool
+	data []byte
+}
+
+// maxClientBacklog caps the bytes queued for one client before it is
+// declared too slow and disconnected.
+const maxClientBacklog = 8 << 20 // 8 MiB
+
+// maxCoalescedFrame bounds one coalesced binary WebSocket message so a burst
+// still streams to the client in pieces instead of one giant frame.
+const maxCoalescedFrame = 256 << 10 // 256 KiB
+
+func newWSClient(conn *websocket.Conn, tabID, ownerToken string) *wsClient {
+	return &wsClient{
+		conn:       conn,
+		done:       make(chan struct{}),
+		tabID:      tabID,
+		ownerToken: ownerToken,
+		notify:     make(chan struct{}, 1),
+	}
+}
+
+// queueBinary appends PTY output for the client, merging it into the last
+// pending binary frame up to maxCoalescedFrame.
+func (c *wsClient) queueBinary(data []byte) {
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+	if c.overflow {
+		return
+	}
+	if n := len(c.out); n > 0 && !c.out[n-1].text && len(c.out[n-1].data)+len(data) <= maxCoalescedFrame {
+		c.out[n-1].data = append(c.out[n-1].data, data...)
+	} else {
+		c.out = append(c.out, outFrame{data: append([]byte(nil), data...)})
+	}
+	c.outBytes += len(data)
+	if c.outBytes > maxClientBacklog {
+		c.overflow = true
+	}
+	c.signal()
+}
+
+// queueText appends a JSON control message.
+func (c *wsClient) queueText(msg []byte) {
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+	if c.overflow {
+		return
+	}
+	c.out = append(c.out, outFrame{text: true, data: msg})
+	c.outBytes += len(msg)
+	c.signal()
+}
+
+func (c *wsClient) signal() {
+	select {
+	case c.notify <- struct{}{}:
+	default:
+	}
+}
+
+// takePending swaps out the queued frames. overflow reports that the
+// backlog limit was exceeded; the caller must then close the connection
+// after flushing what it has.
+func (c *wsClient) takePending() (frames []outFrame, overflow bool) {
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+	frames, c.out = c.out, nil
+	c.outBytes = 0
+	return frames, c.overflow
+}
+
+// writePump is the single writer for the connection (gorilla permits one
+// concurrent writer). It runs until the client is done, the session exits,
+// a write fails, or the client overflows its backlog.
+func (c *wsClient) writePump(sess *Session) {
+	for {
+		select {
+		case <-c.notify:
+			frames, overflow := c.takePending()
+			for _, f := range frames {
+				msgType := websocket.BinaryMessage
+				if f.text {
+					msgType = websocket.TextMessage
+				}
+				if err := c.conn.WriteMessage(msgType, f.data); err != nil {
+					return
+				}
+			}
+			if overflow {
+				log.Printf("session-ws: client too slow on session %s, disconnecting (backlog > %d bytes)", sess.ID, maxClientBacklog)
+				c.conn.Close()
+				return
+			}
+		case <-c.done:
+			return
+		case <-sess.Done():
+			// Session died — flush what is queued, then notify the client.
+			// The exit notice is a TextMessage so xterm.js never renders
+			// it as terminal output.
+			frames, _ := c.takePending()
+			for _, f := range frames {
+				if f.text {
+					continue
+				}
+				if err := c.conn.WriteMessage(websocket.BinaryMessage, f.data); err != nil {
+					return
+				}
+			}
+			exitMsg, _ := json.Marshal(map[string]interface{}{
+				"type": "exit",
+				"code": sess.ExitCode,
+			})
+			c.conn.WriteMessage(websocket.TextMessage, exitMsg)
+			return
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +373,18 @@ type Session struct {
 	// byte (0 = never). Kept as an atomic so readPump can stamp it without
 	// holding mu and API readers see a race-free value.
 	lastOutput atomic.Int64
+
+	// altScreen mirrors whether the application has switched to the
+	// alternate screen (DECSET 1049/1047/47). readPump tracks it from the
+	// output stream; altTail carries the last bytes of the previous chunk
+	// so a sequence split across two PTY reads is still recognised.
+	altScreen atomic.Bool
+	altTail   []byte
+
+	// outMu serialises "record output, then fan it out" against "snapshot
+	// the record, then join the fan-out" so a joining client can neither
+	// miss a chunk nor receive one twice.
+	outMu sync.Mutex
 
 	mu      sync.Mutex
 	clients []*wsClient
@@ -305,8 +492,13 @@ func (s *Session) readPump() {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
+			s.outMu.Lock()
 			s.scrollback.Write(data)
+			var alt bool
+			s.altTail, alt = trackAltScreen(s.altTail, data, s.altScreen.Load())
+			s.altScreen.Store(alt)
 			s.Broadcast(data)
+			s.outMu.Unlock()
 			now := time.Now()
 			s.LastActive = now
 			s.lastOutput.Store(now.UnixNano())
@@ -339,24 +531,113 @@ func (s *Session) readPump() {
 }
 
 // AttachClient adds a WebSocket client to this session's broadcast list.
-// If replayScrollback is true, the full scrollback buffer is sent first so
-// the client sees all previous terminal output (e.g., after a tab reopen).
-func (s *Session) AttachClient(c *wsClient, replayScrollback bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+//
+// prefix is output the caller wants replayed before this session's own
+// buffer (a revived session passes its predecessor's scrollback). When
+// replayScrollback is true the ring buffer follows it. The replay and the
+// join happen under outMu, so the client's view continues exactly where the
+// replay ends: no chunk is lost between the snapshot and the first
+// broadcast, and none is delivered twice.
+//
+// While the application holds the alternate screen the ring is not
+// replayed at all: it is a history of full-screen frames drawn at earlier
+// sizes, and stacking them produces the ghosted picture that a raw replay is
+// known for. The client gets a clean terminal and the caller is told to
+// nudge the application into a full redraw instead. The returned value
+// reports whether anything was replayed.
+func (s *Session) AttachClient(c *wsClient, prefix []byte, replayScrollback bool) (replayed bool) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
 
-	if replayScrollback {
-		data := s.scrollback.ReadAll()
-		if len(data) > 0 {
-			msg, _ := json.Marshal(map[string]string{
-				"type": "scrollback",
-				"data": base64.StdEncoding.EncodeToString(data),
-			})
-			c.conn.WriteMessage(websocket.TextMessage, msg)
-		}
+	var data []byte
+	if len(prefix) > 0 {
+		data = append(data, prefix...)
+	}
+	if replayScrollback && !s.altScreen.Load() {
+		data = append(data, s.scrollback.ReadReplay()...)
+	}
+	if len(data) > 0 {
+		msg, _ := json.Marshal(map[string]string{
+			"type": "scrollback",
+			"data": base64.StdEncoding.EncodeToString(data),
+		})
+		c.queueText(msg)
+		replayed = true
 	}
 
+	s.mu.Lock()
 	s.clients = append(s.clients, c)
+	s.mu.Unlock()
+	return replayed
+}
+
+// InAltScreen reports whether the application currently holds the
+// alternate screen, as tracked from its output.
+func (s *Session) InAltScreen() bool { return s.altScreen.Load() }
+
+// altTailKeep is how many trailing bytes readPump carries between chunks:
+// enough for the longest prefix of a DECSET/DECRST that could be cut, e.g.
+// "\x1b[?1049;2004" before its final byte.
+const altTailKeep = 24
+
+// trackAltScreen scans one chunk of terminal output for alternate-screen
+// switches (CSI ? Pm h / l with 1049, 1047 or 47 among the parameters) and
+// returns the updated state plus the bytes to carry into the next call.
+// tail is the carry from the previous call; a sequence straddling the two
+// chunks is matched on the joined bytes. Re-scanning the carried tail can
+// only re-apply a switch that was already applied, which is idempotent.
+func trackAltScreen(tail, data []byte, cur bool) (newTail []byte, alt bool) {
+	alt = cur
+	buf := data
+	if len(tail) > 0 {
+		buf = make([]byte, 0, len(tail)+len(data))
+		buf = append(buf, tail...)
+		buf = append(buf, data...)
+	}
+	for i := 0; i+2 < len(buf); {
+		j := bytes.Index(buf[i:], []byte("\x1b[?"))
+		if j < 0 {
+			break
+		}
+		p := i + j + 3
+		start := p
+		for p < len(buf) && (buf[p] >= '0' && buf[p] <= '9' || buf[p] == ';') {
+			p++
+		}
+		if p >= len(buf) {
+			break // cut mid-sequence; the tail carry finishes it next time
+		}
+		if buf[p] == 'h' || buf[p] == 'l' {
+			for _, param := range bytes.Split(buf[start:p], []byte(";")) {
+				switch string(param) {
+				case "1049", "1047", "47":
+					alt = buf[p] == 'h'
+				}
+			}
+		}
+		i = p
+	}
+	keep := len(buf)
+	if keep > altTailKeep {
+		keep = altTailKeep
+	}
+	newTail = append([]byte(nil), buf[len(buf)-keep:]...)
+	return newTail, alt
+}
+
+// NudgeRedraw makes the foreground application repaint by delivering two
+// SIGWINCHs: the size is bumped one column narrower and then restored.
+// Full-screen programs redraw from their model on a size change, which is
+// the only way to reconstruct a screen the terminal did not witness.
+func (s *Session) NudgeRedraw() {
+	s.mu.Lock()
+	cols, rows := s.Cols, s.Rows
+	s.mu.Unlock()
+	if s.pty == nil || cols < 2 || rows < 1 {
+		return
+	}
+	pty.Setsize(s.pty, &pty.Winsize{Cols: uint16(cols - 1), Rows: uint16(rows)})
+	pty.Setsize(s.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
 // DetachClient removes a WebSocket client from this session.
@@ -391,8 +672,9 @@ func (s *Session) DisconnectClients(tabID string, tokens map[string]bool) int {
 	return disconnected
 }
 
-// Broadcast sends binary data to all attached clients' send channels.
-// Non-blocking: if a client's channel is full, it is skipped.
+// Broadcast queues binary data for every attached client. It never blocks
+// the PTY reader and never drops bytes: a client that falls too far behind
+// is disconnected by its writePump instead (see wsClient).
 func (s *Session) Broadcast(data []byte) {
 	s.mu.Lock()
 	snapshot := make([]*wsClient, len(s.clients))
@@ -400,11 +682,7 @@ func (s *Session) Broadcast(data []byte) {
 	s.mu.Unlock()
 
 	for _, c := range snapshot {
-		select {
-		case c.send <- data:
-		default:
-			// Client is slow — drop this frame to avoid blocking the PTY reader.
-		}
+		c.queueBinary(data)
 	}
 }
 
@@ -416,18 +694,24 @@ func (s *Session) WriteInput(data []byte) {
 	}
 }
 
-// Resize updates the PTY window size.
-func (s *Session) Resize(cols, rows int) {
-	if s.pty != nil {
+// Resize updates the PTY window size. It reports whether the size actually
+// changed (and so whether the application was sent a SIGWINCH).
+func (s *Session) Resize(cols, rows int) (changed bool) {
+	if cols <= 0 || rows <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	changed = s.Cols != cols || s.Rows != rows
+	s.Cols = cols
+	s.Rows = rows
+	s.mu.Unlock()
+	if s.pty != nil && changed {
 		pty.Setsize(s.pty, &pty.Winsize{
 			Cols: uint16(cols),
 			Rows: uint16(rows),
 		})
 	}
-	s.mu.Lock()
-	s.Cols = cols
-	s.Rows = rows
-	s.mu.Unlock()
+	return changed
 }
 
 // HandleFileDrop decodes a base64-encoded file and saves it to /tmp.

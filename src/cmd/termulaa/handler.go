@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -11,6 +10,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -18,6 +19,10 @@ import (
 // wsMaxMessageSize caps a single WebSocket frame. Frames larger than this
 // close the connection — guards against runaway input / buggy clients.
 const wsMaxMessageSize = 1 << 20 // 1 MiB
+
+// attachGrace is how long a joining session client is given to send its
+// first resize before it is attached and replayed at the PTY's current size.
+const attachGrace = 2 * time.Second
 
 // upgrader allowlists loopback origins only. Non-browser clients that omit
 // the Origin header are permitted so CLIs like `websocat` keep working.
@@ -458,28 +463,8 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 
 	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v, oldScrollback=%d bytes)", sessionID, r.RemoteAddr, revived, len(oldScrollback))
 
-	// Create client
-	client := &wsClient{
-		conn:       conn,
-		send:       make(chan []byte, 256),
-		done:       make(chan struct{}),
-		tabID:      tabID,
-		ownerToken: token,
-	}
-
-	// For revived sessions: send the old scrollback we captured before reviving
-	// (clean, not interleaved with new PTY startup). Then attach without replay.
-	// For alive sessions: replay from the ring buffer (normal reconnect path).
-	if revived && len(oldScrollback) > 0 {
-		msg, _ := json.Marshal(map[string]string{
-			"type": "scrollback",
-			"data": base64.StdEncoding.EncodeToString(oldScrollback),
-		})
-		client.conn.WriteMessage(websocket.TextMessage, msg)
-		sess.AttachClient(client, false)
-	} else {
-		sess.AttachClient(client, true)
-	}
+	client := newWSClient(conn, tabID, token)
+	go client.writePump(sess)
 
 	defer func() {
 		sess.DetachClient(client)
@@ -487,28 +472,32 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		log.Printf("session-ws: client detached from session %s (remote=%s)", sessionID, r.RemoteAddr)
 	}()
 
-	// Writer goroutine: send channel → WebSocket
+	// The replay must be sized for the terminal that will render it, so the
+	// join waits for the client's first resize (sent on open) before
+	// replaying and attaching; a client that never sends one is joined
+	// after attachGrace so it is not left blank. Input received before the
+	// join still reaches the PTY. A revived session replays its
+	// predecessor's scrollback ahead of its own ring, which holds the new
+	// shell's startup output.
+	sized := make(chan bool, 1) // carries "did the first resize change the PTY size"
+	var sizeOnce sync.Once
 	go func() {
-		for {
-			select {
-			case data, ok := <-client.send:
-				if !ok {
-					return
-				}
-				if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
-					return
-				}
-			case <-client.done:
-				return
-			case <-sess.Done():
-				// Session died — notify client
-				exitMsg, _ := json.Marshal(map[string]interface{}{
-					"type": "exit",
-					"code": sess.ExitCode,
-				})
-				conn.WriteMessage(websocket.TextMessage, exitMsg)
-				return
-			}
+		sizeChanged := false
+		select {
+		case sizeChanged = <-sized:
+		case <-time.After(attachGrace):
+		case <-client.done:
+			return
+		}
+		replayed := sess.AttachClient(client, cleanReplayStart(oldScrollback, revived), true)
+		// A full-screen application must repaint what the replay could not
+		// reconstruct. The first resize already delivered a SIGWINCH when
+		// it changed the size; otherwise force one now. Line-mode shells
+		// redraw their prompt line on a SIGWINCH, so the nudge is only
+		// spent when the replay was skipped or the application is likely
+		// to be drawing a frame.
+		if !sizeChanged && (sess.InAltScreen() || !replayed) {
+			sess.NudgeRedraw()
 		}
 	}()
 
@@ -530,7 +519,8 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 			if json.Unmarshal(msg, &control) == nil {
 				switch control.Type {
 				case "resize":
-					sess.Resize(control.Cols, control.Rows)
+					changed := sess.Resize(control.Cols, control.Rows)
+					sizeOnce.Do(func() { sized <- changed })
 					continue
 				case "file":
 					if path, err := sess.HandleFileDrop(control.Name, control.Data); err != nil {

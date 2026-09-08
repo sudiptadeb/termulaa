@@ -297,15 +297,15 @@
         try {
           var msg = JSON.parse(event.data);
           if (msg.type === 'scrollback' && msg.data) {
-            // Skip if already loaded — a reconnect to a now-alive session
-            // would send its (small) ring buffer, wiping the richer old scrollback.
-            if (pane.scrollbackLoaded) return;
+            // Every replay is authoritative: the server sends it once per
+            // attach, sized for this terminal, and whatever this pane showed
+            // before the reconnect is stale by definition.
             pane.term.reset();
             pane.replayingScrollback = true;
             var binary = atob(msg.data);
             var bytes = new Uint8Array(binary.length);
             for (var j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-            var cleaned = stripQueryResponses(bytes);
+            var cleaned = msg.snapshot ? bytes : stripQueryResponses(bytes);
             pane.term.write(cleaned, function() {
               pane.replayingScrollback = false;
             });
