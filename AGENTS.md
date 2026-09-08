@@ -56,6 +56,9 @@ frameworks. Three Go deps: `creack/pty`, `gorilla/websocket`, and
 `xtaci/smux` (justified third: multiplexes all `-rc` viewer connections
 over a small pool of outbound tunnels; hand-rolled stream framing would
 be riskier). Frontend is vendored — no npm, no bundler, no build step.
+The terminal emulator in `src/internal/vterm` is written in-repo for the
+same reason: it adds no dependency, and its fidelity is checked against
+the shipped xterm.js bundle rather than assumed.
 
 ## Key patterns
 
@@ -129,6 +132,17 @@ New behavior should add focused `*_test.go` coverage. Table-driven tests
 for handler / session / state logic. Coverage is light today — adding
 meaningful tests is always welcome (see issue #3).
 
+`src/internal/vterm` has a differential test, `TestAgainstXterm`, that
+feeds a corpus to both the emulator and the vendored xterm.js bundle in
+headless Chromium and compares every line, cell attribute, the cursor
+and the input modes. It runs when `node` can `require('playwright-core')`
+(set `NODE_PATH`) and a Playwright Chromium is installed
+(`PLAYWRIGHT_BROWSERS_PATH` or `PLAYWRIGHT_CHROMIUM`); otherwise it
+skips. Set `VTERM_ORACLE=1` to make a missing oracle a failure. Any
+change to the emulator must keep that test green: the emulator's state
+is what a reconnecting client receives, so where it disagrees with
+xterm.js the reconnected screen is wrong.
+
 ## Commit conventions
 
 - Short imperative subject, lowercase. Prefixes when they clarify the
@@ -160,7 +174,8 @@ meaningful tests is always welcome (see issue #3).
 | `src/cmd/termulaa/main.go` | Entry point, config, security middleware |
 | `src/cmd/termulaa/handler.go` | HTTP routes + WebSocket upgraders |
 | `src/cmd/termulaa/manager.go` | Sessions, tabs, state persistence |
-| `src/cmd/termulaa/session.go` | PTY, scrollback ring buffer |
+| `src/cmd/termulaa/session.go` | PTY, client fan-out, scrollback ring buffer |
+| `src/internal/vterm/` | Headless terminal emulator; `Snapshot()` is what a reconnecting client replays |
 | `src/cmd/termulaa/tabs.go` | Binary split-tree layout helpers |
 | `src/cmd/termulaa/tunnel.go` | `-rc` reverse tunnel agent (pooled smux tunnels) |
 | `src/cmd/termulaa/wsconn.go` | WebSocket-as-net.Conn adapter for the tunnel |

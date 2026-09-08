@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/sudiptadeb/termulaa/src/internal/vterm"
 )
 
 // Config holds the termulaa runtime configuration.
@@ -153,11 +155,13 @@ func (m *SessionManager) LoadState() {
 			s.lastOutput.Store(meta.LastActive.UnixNano())
 		}
 
-		// Load scrollback if available.
+		// Load scrollback if available and rebuild the terminal picture
+		// from it, so the session shows its last output until revived.
 		sbPath := m.scrollbackPath(id)
 		if err := s.scrollback.LoadFrom(sbPath); err != nil && !os.IsNotExist(err) {
 			log.Printf("manager: failed to load scrollback for %s: %v", id, err)
 		}
+		s.term = restoreTerminal(meta.Cols, meta.Rows, s.scrollback)
 
 		m.sessions[id] = s
 		loaded++
@@ -349,7 +353,7 @@ func (m *SessionManager) defaultSessionSize() (int, int) {
 	return cols, rows
 }
 
-func (m *SessionManager) spawnSession(id, cwd string, cols, rows int) (*Session, error) {
+func (m *SessionManager) spawnSession(id, cwd string, cols, rows int, term *vterm.Terminal) (*Session, error) {
 	if cwd == "" {
 		cwd = m.defaultSessionCWD()
 	}
@@ -372,6 +376,7 @@ func (m *SessionManager) spawnSession(id, cwd string, cols, rows int) (*Session,
 		m.historyPath(id),
 		m.cfg.HistoryLimit,
 		m.scrollbackBytes(),
+		term,
 	)
 }
 
@@ -381,7 +386,7 @@ func (m *SessionManager) CreateSession() (*Session, error) {
 	cols, rows := m.defaultSessionSize()
 	cwd := m.defaultSessionCWD()
 
-	s, err := m.spawnSession(id, cwd, cols, rows)
+	s, err := m.spawnSession(id, cwd, cols, rows, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -478,14 +483,13 @@ func (m *SessionManager) ReviveSession(id string) (*Session, error) {
 		}
 	}
 
-	s, err := m.spawnSession(id, cwd, cols, rows)
+	// The terminal state carries over: the new shell's output continues
+	// below the old session's last screen, and its scrollback is kept. The
+	// ring buffer starts fresh; it only persists what this process wrote.
+	s, err := m.spawnSession(id, cwd, cols, rows, old.term)
 	if err != nil {
 		return nil, fmt.Errorf("revive session: %w", err)
 	}
-
-	// Old scrollback is NOT copied into the new session's ring buffer.
-	// The handler captures it before reviving and sends it separately,
-	// avoiding interleaving with the new PTY's startup output.
 
 	m.mu.Lock()
 	m.sessions[id] = s
@@ -814,7 +818,7 @@ func (m *SessionManager) ReplaceTabSessions(tabID string) (*LayoutNode, error) {
 
 	// Create new sessions for each new ID.
 	for _, newID := range mapping {
-		s, err := m.spawnSession(newID, cwd, cols, rows)
+		s, err := m.spawnSession(newID, cwd, cols, rows, nil)
 		if err != nil {
 			for _, createdID := range createdSessionIDs {
 				if cleanupErr := m.DeleteSession(createdID); cleanupErr != nil {

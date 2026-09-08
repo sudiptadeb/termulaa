@@ -20,6 +20,8 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+
+	"github.com/sudiptadeb/termulaa/src/internal/vterm"
 )
 
 // generateID creates a random hex ID (16 bytes = 32 chars).
@@ -374,12 +376,13 @@ type Session struct {
 	// holding mu and API readers see a race-free value.
 	lastOutput atomic.Int64
 
-	// altScreen mirrors whether the application has switched to the
-	// alternate screen (DECSET 1049/1047/47). readPump tracks it from the
-	// output stream; altTail carries the last bytes of the previous chunk
-	// so a sequence split across two PTY reads is still recognised.
-	altScreen atomic.Bool
-	altTail   []byte
+	// term is the headless terminal that mirrors what an attached client
+	// would show. Every PTY byte is fed to it; a joining client receives
+	// its Snapshot rather than the raw byte history, so full-screen and
+	// inline-redrawing programs reattach to the current picture instead of
+	// a stack of stale frames. It survives a revive so history carries
+	// over. Guarded by outMu.
+	term *vterm.Terminal
 
 	// outMu serialises "record output, then fan it out" against "snapshot
 	// the record, then join the fan-out" so a joining client can neither
@@ -398,7 +401,9 @@ const (
 
 // NewSession spawns a new PTY session with the given parameters.
 // histFile is the path to use for HISTFILE (shell history persistence).
-func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyLimit int, scrollbackBytes int) (*Session, error) {
+// term, when non-nil, is the terminal state carried over from a session
+// being revived; otherwise a fresh one is created.
+func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyLimit int, scrollbackBytes int, term *vterm.Terminal) (*Session, error) {
 	// Login-shell convention: argv[0] = "-bash" so the shell reads all startup files.
 	cmd := exec.Command(shell)
 	cmd.Args = []string{"-" + filepath.Base(shell)}
@@ -461,6 +466,12 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 		Rows: uint16(rows),
 	})
 
+	if term == nil {
+		term = vterm.New(cols, rows)
+	} else {
+		term.Resize(cols, rows)
+	}
+
 	s := &Session{
 		ID:         id,
 		CWD:        cwd,
@@ -474,12 +485,30 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 		cmd:        cmd,
 		pty:        ptmx,
 		scrollback: NewRingBuffer(scrollbackBytes),
+		term:       term,
 		clients:    make([]*wsClient, 0),
 		done:       make(chan struct{}),
 	}
 
 	go s.readPump()
 	return s, nil
+}
+
+// restoreTerminal rebuilds a terminal for a session loaded from disk by
+// replaying its persisted ring buffer, so the picture it last showed is
+// available before the session is revived.
+func restoreTerminal(cols, rows int, ring *RingBuffer) *vterm.Terminal {
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	term := vterm.New(cols, rows)
+	if data := ring.ReadReplay(); len(data) > 0 {
+		term.Write(data)
+	}
+	return term
 }
 
 // readPump continuously reads PTY output, writes to scrollback, and broadcasts
@@ -494,9 +523,7 @@ func (s *Session) readPump() {
 
 			s.outMu.Lock()
 			s.scrollback.Write(data)
-			var alt bool
-			s.altTail, alt = trackAltScreen(s.altTail, data, s.altScreen.Load())
-			s.altScreen.Store(alt)
+			s.term.Write(data)
 			s.Broadcast(data)
 			s.outMu.Unlock()
 			now := time.Now()
@@ -532,37 +559,26 @@ func (s *Session) readPump() {
 
 // AttachClient adds a WebSocket client to this session's broadcast list.
 //
-// prefix is output the caller wants replayed before this session's own
-// buffer (a revived session passes its predecessor's scrollback). When
-// replayScrollback is true the ring buffer follows it. The replay and the
-// join happen under outMu, so the client's view continues exactly where the
-// replay ends: no chunk is lost between the snapshot and the first
-// broadcast, and none is delivered twice.
-//
-// While the application holds the alternate screen the ring is not
-// replayed at all: it is a history of full-screen frames drawn at earlier
-// sizes, and stacking them produces the ghosted picture that a raw replay is
-// known for. The client gets a clean terminal and the caller is told to
-// nudge the application into a full redraw instead. The returned value
-// reports whether anything was replayed.
-func (s *Session) AttachClient(c *wsClient, prefix []byte, replayScrollback bool) (replayed bool) {
+// When replay is true the client first receives a snapshot of the
+// terminal state (scrollback, screen, cursor, modes) serialised for the
+// terminal's current size. The snapshot and the join happen under outMu,
+// so the client's view continues exactly where the snapshot ends: no
+// chunk is lost between the two and none is delivered twice. The returned
+// value reports whether a snapshot was sent.
+func (s *Session) AttachClient(c *wsClient, replay bool) (replayed bool) {
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
 
-	var data []byte
-	if len(prefix) > 0 {
-		data = append(data, prefix...)
-	}
-	if replayScrollback && !s.altScreen.Load() {
-		data = append(data, s.scrollback.ReadReplay()...)
-	}
-	if len(data) > 0 {
-		msg, _ := json.Marshal(map[string]string{
-			"type": "scrollback",
-			"data": base64.StdEncoding.EncodeToString(data),
-		})
-		c.queueText(msg)
-		replayed = true
+	if replay {
+		if data := s.term.Snapshot(); len(data) > 0 {
+			msg, _ := json.Marshal(map[string]interface{}{
+				"type":     "scrollback",
+				"snapshot": true,
+				"data":     base64.StdEncoding.EncodeToString(data),
+			})
+			c.queueText(msg)
+			replayed = true
+		}
 	}
 
 	s.mu.Lock()
@@ -572,58 +588,16 @@ func (s *Session) AttachClient(c *wsClient, prefix []byte, replayScrollback bool
 }
 
 // InAltScreen reports whether the application currently holds the
-// alternate screen, as tracked from its output.
-func (s *Session) InAltScreen() bool { return s.altScreen.Load() }
-
-// altTailKeep is how many trailing bytes readPump carries between chunks:
-// enough for the longest prefix of a DECSET/DECRST that could be cut, e.g.
-// "\x1b[?1049;2004" before its final byte.
-const altTailKeep = 24
-
-// trackAltScreen scans one chunk of terminal output for alternate-screen
-// switches (CSI ? Pm h / l with 1049, 1047 or 47 among the parameters) and
-// returns the updated state plus the bytes to carry into the next call.
-// tail is the carry from the previous call; a sequence straddling the two
-// chunks is matched on the joined bytes. Re-scanning the carried tail can
-// only re-apply a switch that was already applied, which is idempotent.
-func trackAltScreen(tail, data []byte, cur bool) (newTail []byte, alt bool) {
-	alt = cur
-	buf := data
-	if len(tail) > 0 {
-		buf = make([]byte, 0, len(tail)+len(data))
-		buf = append(buf, tail...)
-		buf = append(buf, data...)
-	}
-	for i := 0; i+2 < len(buf); {
-		j := bytes.Index(buf[i:], []byte("\x1b[?"))
-		if j < 0 {
-			break
-		}
-		p := i + j + 3
-		start := p
-		for p < len(buf) && (buf[p] >= '0' && buf[p] <= '9' || buf[p] == ';') {
-			p++
-		}
-		if p >= len(buf) {
-			break // cut mid-sequence; the tail carry finishes it next time
-		}
-		if buf[p] == 'h' || buf[p] == 'l' {
-			for _, param := range bytes.Split(buf[start:p], []byte(";")) {
-				switch string(param) {
-				case "1049", "1047", "47":
-					alt = buf[p] == 'h'
-				}
-			}
-		}
-		i = p
-	}
-	keep := len(buf)
-	if keep > altTailKeep {
-		keep = altTailKeep
-	}
-	newTail = append([]byte(nil), buf[len(buf)-keep:]...)
-	return newTail, alt
+// alternate screen.
+func (s *Session) InAltScreen() bool {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	return s.term.AltScreen()
 }
+
+// Terminal returns the session's terminal state; the caller must not
+// retain it across other session operations.
+func (s *Session) Terminal() *vterm.Terminal { return s.term }
 
 // NudgeRedraw makes the foreground application repaint by delivering two
 // SIGWINCHs: the size is bumped one column narrower and then restored.
@@ -705,6 +679,11 @@ func (s *Session) Resize(cols, rows int) (changed bool) {
 	s.Cols = cols
 	s.Rows = rows
 	s.mu.Unlock()
+	if changed {
+		s.outMu.Lock()
+		s.term.Resize(cols, rows)
+		s.outMu.Unlock()
+	}
 	if s.pty != nil && changed {
 		pty.Setsize(s.pty, &pty.Winsize{
 			Cols: uint16(cols),

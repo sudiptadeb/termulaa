@@ -12,8 +12,11 @@ tab groups, group the terminals with the project they belong to and
 switch between projects cleanly.
 
 Persistent PTY sessions that survive tab close, tabs with binary pane
-splits, scrollback replay on reconnect, per-session CWD tracking. Single
-small Go binary. Loopback-only — see [SECURITY.md](SECURITY.md).
+splits, exact screen restore on reconnect (the server keeps a terminal
+emulator per session, so full-screen and inline-redrawing programs come
+back as they are, not as a replay of stale frames), per-session CWD
+tracking. Single small Go binary. Loopback-only — see
+[SECURITY.md](SECURITY.md).
 
 ![termulaa — a coding agent and a streaming log in a single split terminal](resources/images/hero-real.png)
 
@@ -269,7 +272,10 @@ folds the pieces into one small binary and aims it at one use case: a
 browser tab you leave open next to whatever you're building.
 
 - **Persistent sessions** — the PTY stays alive after the browser tab
-  closes; reopening the tab replays the scrollback ring buffer.
+  closes; reopening the tab restores the exact screen and scrollback.
+  The server runs a headless terminal emulator per session and hands a
+  reconnecting client a snapshot of its state, so `vim`, `htop` or a
+  coding agent redrawing inline come back as they are.
 
   ![reopening a persistent session](resources/images/persistence.gif)
 
@@ -279,8 +285,9 @@ browser tab you leave open next to whatever you're building.
   cycle focus. `Cmd/Ctrl+/` (or the `?` in the corner) shows the in-app
   shortcut guide; rebind any of them via the `terminalKeybindings`
   localStorage key.
-- **Dead-session revival** — if the PTY exited, the on-disk scrollback
-  replays and a new shell spawns in the last-known cwd.
+- **Dead-session revival** — if the PTY exited, the last screen and
+  scrollback are restored from disk and a new shell spawns below them in
+  the last-known cwd.
 - **Per-session CWD tracking** — follows `/proc/<pid>/cwd` on Linux,
   `lsof -p` on macOS.
 - **Shell history** — per-session `HISTFILE`.

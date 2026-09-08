@@ -72,6 +72,9 @@
         "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: theme,
       allowProposedApi: true,
+      // The server snapshots up to 2000 lines of history on attach; keep
+      // room for it plus what streams in afterwards.
+      scrollback: 5000,
     };
   }
 

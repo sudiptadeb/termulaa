@@ -438,12 +438,11 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		return
 	}
 
-	// Capture old scrollback BEFORE reviving so it doesn't get interleaved
-	// with the new PTY's startup output in the ring buffer.
-	var oldScrollback []byte
+	// A dead session is revived on attach. Its terminal state (scrollback
+	// and last screen) carries over into the new session, so the client
+	// sees the old output followed by the new shell's startup.
 	revived := false
 	if !sess.Alive {
-		oldScrollback = sess.scrollback.ReadAll()
 		var err error
 		sess, err = mgr.ReviveSession(sessionID)
 		if err != nil {
@@ -461,7 +460,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
 
-	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v, oldScrollback=%d bytes)", sessionID, r.RemoteAddr, revived, len(oldScrollback))
+	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v)", sessionID, r.RemoteAddr, revived)
 
 	client := newWSClient(conn, tabID, token)
 	go client.writePump(sess)
@@ -472,13 +471,11 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		log.Printf("session-ws: client detached from session %s (remote=%s)", sessionID, r.RemoteAddr)
 	}()
 
-	// The replay must be sized for the terminal that will render it, so the
-	// join waits for the client's first resize (sent on open) before
-	// replaying and attaching; a client that never sends one is joined
+	// The snapshot must be sized for the terminal that will render it, so
+	// the join waits for the client's first resize (sent on open) before
+	// snapshotting and attaching; a client that never sends one is joined
 	// after attachGrace so it is not left blank. Input received before the
-	// join still reaches the PTY. A revived session replays its
-	// predecessor's scrollback ahead of its own ring, which holds the new
-	// shell's startup output.
+	// join still reaches the PTY.
 	sized := make(chan bool, 1) // carries "did the first resize change the PTY size"
 	var sizeOnce sync.Once
 	go func() {
@@ -489,13 +486,14 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		case <-client.done:
 			return
 		}
-		replayed := sess.AttachClient(client, cleanReplayStart(oldScrollback, revived), true)
-		// A full-screen application must repaint what the replay could not
-		// reconstruct. The first resize already delivered a SIGWINCH when
-		// it changed the size; otherwise force one now. Line-mode shells
-		// redraw their prompt line on a SIGWINCH, so the nudge is only
-		// spent when the replay was skipped or the application is likely
-		// to be drawing a frame.
+		replayed := sess.AttachClient(client, true)
+		// The snapshot is a faithful copy of the terminal state, but a
+		// full-screen application repainting from its own model is the
+		// last word on what the screen should show. The first resize
+		// already delivered a SIGWINCH when it changed the size; otherwise
+		// force one now. Line-mode shells only redraw their prompt line on
+		// a SIGWINCH, so the nudge is spent when an application holds the
+		// alternate screen or nothing could be replayed.
 		if !sizeChanged && (sess.InAltScreen() || !replayed) {
 			sess.NudgeRedraw()
 		}

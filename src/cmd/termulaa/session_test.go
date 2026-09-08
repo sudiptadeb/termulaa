@@ -16,7 +16,7 @@ func TestShellQuotePath(t *testing.T) {
 
 func TestSessionLastOutputStampedByReadPump(t *testing.T) {
 	dir := t.TempDir()
-	s, err := NewSession(generateID(), findShell(), dir, 80, 24, filepath.Join(dir, "hist"), 0, defaultScrollbackBytes)
+	s, err := NewSession(generateID(), findShell(), dir, 80, 24, filepath.Join(dir, "hist"), 0, defaultScrollbackBytes, nil)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -73,42 +73,6 @@ func TestRingBufferReadReplayTrimsWrappedHead(t *testing.T) {
 	got := r.ReadReplay()
 	if string(got) != "\x1b[31mXY\x1b[0m" {
 		t.Fatalf("ReadReplay = %q, want replay starting at the first ESC", got)
-	}
-}
-
-func TestTrackAltScreen(t *testing.T) {
-	var tail []byte
-	alt := false
-
-	tail, alt = trackAltScreen(tail, []byte("prompt$ \x1b[?1049h\x1b[H\x1b[2J"), alt)
-	if !alt {
-		t.Fatal("expected alt screen after DECSET 1049")
-	}
-	// Leaving via 1049l split across two chunks.
-	tail, alt = trackAltScreen(tail, []byte("frame\x1b[?10"), alt)
-	if !alt {
-		t.Fatal("a cut sequence must not change state yet")
-	}
-	tail, alt = trackAltScreen(tail, []byte("49l$ "), alt)
-	if alt {
-		t.Fatal("expected main screen after the split DECRST 1049 completed")
-	}
-	// Multi-parameter DECSET with 47 in the middle.
-	tail, alt = trackAltScreen(tail, []byte("\x1b[?1000;47;1006h"), alt)
-	if !alt {
-		t.Fatal("expected alt screen from a multi-parameter DECSET containing 47")
-	}
-	// Unrelated modes do not touch it; 1047l does.
-	tail, alt = trackAltScreen(tail, []byte("\x1b[?2004h\x1b[?25l"), alt)
-	if !alt {
-		t.Fatal("unrelated DECSET flipped alt screen state")
-	}
-	_, alt = trackAltScreen(tail, []byte("\x1b[?1047l"), alt)
-	if alt {
-		t.Fatal("expected main screen after DECRST 1047")
-	}
-	if len(tail) > altTailKeep {
-		t.Fatalf("tail carry %d bytes exceeds altTailKeep %d", len(tail), altTailKeep)
 	}
 }
 
