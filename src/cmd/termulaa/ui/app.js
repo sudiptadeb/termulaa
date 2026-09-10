@@ -357,6 +357,15 @@
       clearTimeout(pane.reconnectTimer);
       pane.reconnectTimer = null;
     }
+    // A pane socket is only accepted with a live owner token; while the
+    // tab socket is down the tab reconnect reopens every pane afterwards.
+    if (!tabWS || tabWS.readyState !== WebSocket.OPEN) return;
+
+    if (pane.ws) {
+      var stale = pane.ws;
+      pane.ws = null;
+      try { stale.close(); } catch (e) { /* ignore */ }
+    }
 
     var wsUrl = wsURL('ws/session/' + pane.sessionID +
       '?tab_id=' + encodeURIComponent(window.TAB_ID) +
@@ -367,7 +376,8 @@
     pane.ws = ws;
 
     ws.onopen = function() {
-      if (pane.disposed) { ws.close(); return; }
+      if (pane.disposed || pane.ws !== ws) { ws.close(); return; }
+      pane.lastPong = Date.now();
       if (pane.active) pane.term.focus();
       try { pane.fitAddon.fit(); } catch (e) { /* ignore */ }
       var cols = pane.term.cols;
@@ -376,10 +386,12 @@
     };
 
     ws.onmessage = function(event) {
-      if (pane.disposed) return;
+      if (pane.disposed || pane.ws !== ws) return;
+      pane.lastPong = Date.now();
       if (typeof event.data === 'string') {
         try {
           var msg = JSON.parse(event.data);
+          if (msg.type === 'pong') return;
           if (msg.type === 'scrollback' && msg.data) {
             // Every replay is authoritative: the server sends it once per
             // attach, sized for this terminal, and whatever this pane showed
@@ -410,7 +422,7 @@
     };
 
     ws.onclose = function() {
-      if (pane.disposed) return;
+      if (pane.disposed || pane.ws !== ws) return;
       pane.ws = null;
       schedulePaneReconnect(pane);
     };
@@ -1014,6 +1026,7 @@
 
   function handleTabWSMessage(event) {
     var msg;
+    tabLastPong = Date.now();
     try {
       msg = JSON.parse(event.data);
     } catch (e) {
@@ -1031,8 +1044,13 @@
         applyClosePane(msg.id, msg.layout);
         break;
 
+      case 'pong':
+        tabLastPong = Date.now();
+        break;
+
       case 'disconnected':
         // We've been taken over.
+        takenOver = true;
         showTakeoverBanner();
         break;
 
@@ -1087,9 +1105,12 @@
 
   // ── Tab WS Connection ──────────────────────────────────────────────────────
 
-  function connectTabWS() {
+  var takenOver = false;
+
+  function connectTabWS(resumeToken) {
     return new Promise(function(resolve, reject) {
-      var wsUrl = wsURL('ws/tab/' + window.TAB_ID);
+      var wsUrl = wsURL('ws/tab/' + window.TAB_ID +
+        (resumeToken ? '?resume=' + encodeURIComponent(resumeToken) : ''));
 
       var ws = new WebSocket(wsUrl);
       tabWS = ws;
@@ -1150,10 +1171,112 @@
       };
 
       ws.onclose = function() {
-        tabWS = null;
-        if (!initialized) reject(new Error('Tab WS closed before init'));
+        if (tabWS === ws) tabWS = null;
+        if (!initialized) {
+          reject(new Error('Tab WS closed before init'));
+          return;
+        }
+        if (!takenOver) scheduleTabReconnect();
       };
     });
+  }
+
+  // ── Connection liveness ─────────────────────────────────────────────────────
+  // A page in the background (a phone switching apps) has its sockets killed
+  // without a close event; on return they still report OPEN. Every socket is
+  // pinged on a timer while visible and probed the moment the page comes
+  // back; one that does not answer is closed and reopened. The tab socket
+  // resumes with its previous owner token so the pane sockets stay valid,
+  // and reopens every pane afterwards. Reconnects are cheap now: a pane
+  // gets an exact snapshot of its terminal, not a replay.
+
+  var PING_INTERVAL = 25000, PONG_TIMEOUT = 4000;
+  var tabReconnectTimer = null, tabReconnectDelay = 1000, tabLastPong = 0;
+
+  function scheduleTabReconnect() {
+    if (tabReconnectTimer || takenOver) return;
+    tabReconnectTimer = setTimeout(function() {
+      tabReconnectTimer = null;
+      reconnectTab();
+    }, tabReconnectDelay);
+    tabReconnectDelay = Math.min(tabReconnectDelay * 2, 10000);
+  }
+
+  function reconnectTab() {
+    if (takenOver || (tabWS && tabWS.readyState === WebSocket.OPEN)) return;
+    connectTabWS(ownerToken).then(function(data) {
+      tabReconnectDelay = 1000;
+      tabLastPong = Date.now();
+      if (root) {
+        walkLeaves(root, function(pane) { connectPaneWS(pane); });
+      }
+    }).catch(function() {
+      scheduleTabReconnect();
+    });
+  }
+
+  function socketAlive(ws, lastPong) {
+    return ws && ws.readyState === WebSocket.OPEN && Date.now() - lastPong < PING_INTERVAL + PONG_TIMEOUT;
+  }
+
+  // Sends pings; a socket whose last answer is too old is closed so its
+  // close handler reconnects it.
+  function pingConnections() {
+    if (takenOver) return;
+    if (tabWS && tabWS.readyState === WebSocket.OPEN) {
+      if (!socketAlive(tabWS, tabLastPong)) {
+        try { tabWS.close(); } catch (e) { /* ignore */ }
+      } else {
+        try { tabWS.send(JSON.stringify({ type: 'ping' })); } catch (e) { /* ignore */ }
+      }
+    } else if (!tabWS) {
+      scheduleTabReconnect();
+    }
+    if (root) {
+      walkLeaves(root, function(pane) {
+        if (pane.disposed) return;
+        if (!pane.ws) {
+          connectPaneWS(pane);
+        } else if (pane.ws.readyState === WebSocket.OPEN) {
+          if (!socketAlive(pane.ws, pane.lastPong)) {
+            connectPaneWS(pane);
+          } else {
+            try { pane.ws.send(JSON.stringify({ type: 'ping' })); } catch (e) { /* ignore */ }
+          }
+        }
+      });
+    }
+  }
+
+  // On return to the foreground: ping now, and give each socket PONG_TIMEOUT
+  // to answer before it is replaced.
+  function probeConnections() {
+    if (takenOver || document.visibilityState === 'hidden') return;
+    var t0 = Date.now();
+    pingConnections();
+    setTimeout(function() {
+      if (takenOver) return;
+      if (tabWS && tabWS.readyState === WebSocket.OPEN && tabLastPong < t0) {
+        try { tabWS.close(); } catch (e) { /* ignore */ }
+      }
+      if (root) {
+        walkLeaves(root, function(pane) {
+          if (!pane.disposed && pane.ws && pane.ws.readyState === WebSocket.OPEN && (pane.lastPong || 0) < t0) {
+            connectPaneWS(pane);
+          }
+        });
+      }
+    }, PONG_TIMEOUT);
+  }
+
+  function initLiveness() {
+    setInterval(function() {
+      if (document.visibilityState !== 'hidden') pingConnections();
+    }, PING_INTERVAL);
+    document.addEventListener('visibilitychange', probeConnections);
+    window.addEventListener('pageshow', probeConnections);
+    window.addEventListener('focus', probeConnections);
+    window.addEventListener('online', probeConnections);
   }
 
   // ── Mobile Key Bar ─────────────────────────────────────────────────────────
@@ -1469,11 +1592,15 @@
       root = reconstructLayout(rootContainer, tabData.layout);
     }
 
+    tabLastPong = Date.now();
+
     // Step 3: Focus first pane.
     var panes = getAllPanes();
     if (panes.length > 0) {
       setActivePane(panes[0]);
     }
+
+    initLiveness();
 
     // Keyboard shortcuts
     document.addEventListener('keydown', handleKeyboardShortcuts, true);

@@ -24,6 +24,25 @@ const wsMaxMessageSize = 1 << 20 // 1 MiB
 // first resize before it is attached and replayed at the PTY's current size.
 const attachGrace = 2 * time.Second
 
+// Liveness for both WebSocket kinds. A page frozen in the background (a
+// phone switching apps) stops answering; without a deadline its socket
+// would linger as a zombie and keep its tab ownership. Browsers answer
+// protocol pings automatically, so a live page never trips the deadline.
+const (
+	wsPingInterval = 30 * time.Second
+	wsReadTimeout  = 90 * time.Second
+)
+
+var pongMsg = []byte(`{"type":"pong"}`)
+
+// armReadDeadline keeps the read deadline moving while pongs arrive.
+func armReadDeadline(conn *websocket.Conn) {
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	})
+}
+
 // upgrader allowlists loopback origins only. Non-browser clients that omit
 // the Origin header are permitted so CLIs like `websocat` keep working.
 var upgrader = websocket.Upgrader{
@@ -277,8 +296,14 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		return
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
+	armReadDeadline(conn)
 
-	if mgr.IsTabActive(tabID) {
+	// A page that lost its connection resumes with its previous token and
+	// keeps ownership silently; anything else goes through the ownership
+	// flow below.
+	tc := mgr.ResumeTabClient(tabID, r.URL.Query().Get("resume"), conn)
+
+	if tc == nil && mgr.IsTabActive(tabID) {
 		// Tab already has an owner — send conflict and wait for resolution.
 		conflictMsg, _ := json.Marshal(map[string]string{
 			"type":    "conflict",
@@ -321,13 +346,14 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		}
 	}
 
-	tc := &tabClient{
-		conn:  conn,
-		tabID: tabID,
-		token: generateID(),
+	if tc == nil {
+		tc = &tabClient{
+			conn:  conn,
+			tabID: tabID,
+			token: generateID(),
+		}
+		mgr.RegisterTabClient(tabID, tc)
 	}
-
-	mgr.RegisterTabClient(tabID, tc)
 	defer func() {
 		mgr.UnregisterTabClient(tabID, tc)
 		conn.Close()
@@ -336,17 +362,33 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 
 	// Send connected message with current layout.
 	tab = mgr.GetTab(tabID)
-	connectedMsg, _ := json.Marshal(map[string]interface{}{
+	if err := tc.send(map[string]interface{}{
 		"type":     "connected",
 		"layout":   tab.Layout,
 		"sessions": tab.SessionIDs(),
 		"token":    tc.token,
-	})
-	if err := conn.WriteMessage(websocket.TextMessage, connectedMsg); err != nil {
+	}); err != nil {
 		return
 	}
 
 	log.Printf("tab-ws: client connected to tab %s (remote=%s)", tabID, r.RemoteAddr)
+
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go func() {
+		t := time.NewTicker(wsPingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if tc.sendRaw(websocket.PingMessage, nil) != nil {
+					return
+				}
+			case <-stopPing:
+				return
+			}
+		}
+	}()
 
 	// Read loop: handle tab-level commands from the client.
 	for {
@@ -367,11 +409,13 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		}
 
 		switch cmd.Type {
+		case "ping":
+			tc.sendRaw(websocket.TextMessage, pongMsg)
+
 		case "split":
 			session, newLayout, err := mgr.SplitPane(tabID, cmd.SessionID, cmd.Direction)
 			if err != nil {
-				errMsg, _ := json.Marshal(map[string]string{"type": "error", "message": err.Error()})
-				conn.WriteMessage(websocket.TextMessage, errMsg)
+				tc.send(map[string]string{"type": "error", "message": err.Error()})
 				continue
 			}
 			mgr.BroadcastTabEvent(tabID, map[string]interface{}{
@@ -385,8 +429,7 @@ func handleTabWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager) {
 		case "close_pane":
 			newLayout, err := mgr.ClosePane(tabID, cmd.SessionID)
 			if err != nil {
-				errMsg, _ := json.Marshal(map[string]string{"type": "error", "message": err.Error()})
-				conn.WriteMessage(websocket.TextMessage, errMsg)
+				tc.send(map[string]string{"type": "error", "message": err.Error()})
 				continue
 			}
 			mgr.BroadcastTabEvent(tabID, map[string]interface{}{
@@ -459,6 +502,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		return
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
+	armReadDeadline(conn)
 
 	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v)", sessionID, r.RemoteAddr, revived)
 
@@ -516,6 +560,9 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 			}
 			if json.Unmarshal(msg, &control) == nil {
 				switch control.Type {
+				case "ping":
+					client.queueText(pongMsg)
+					continue
 				case "resize":
 					changed := sess.Resize(control.Cols, control.Rows)
 					sizeOnce.Do(func() { sized <- changed })

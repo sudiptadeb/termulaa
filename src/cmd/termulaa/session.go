@@ -280,8 +280,14 @@ func (c *wsClient) takePending() (frames []outFrame, overflow bool) {
 // concurrent writer). It runs until the client is done, the session exits,
 // a write fails, or the client overflows its backlog.
 func (c *wsClient) writePump(sess *Session) {
+	ping := time.NewTicker(wsPingInterval)
+	defer ping.Stop()
 	for {
 		select {
+		case <-ping.C:
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		case <-c.notify:
 			frames, overflow := c.takePending()
 			for _, f := range frames {

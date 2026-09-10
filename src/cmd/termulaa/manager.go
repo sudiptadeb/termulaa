@@ -40,6 +40,25 @@ type tabClient struct {
 	conn  *websocket.Conn
 	tabID string
 	token string
+
+	// wmu serialises writes: the read loop, BroadcastTabEvent and
+	// DisconnectTabOwner all write to the same connection.
+	wmu sync.Mutex
+}
+
+// send writes one JSON message to the client.
+func (tc *tabClient) send(v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return tc.sendRaw(websocket.TextMessage, data)
+}
+
+func (tc *tabClient) sendRaw(msgType int, data []byte) error {
+	tc.wmu.Lock()
+	defer tc.wmu.Unlock()
+	return tc.conn.WriteMessage(msgType, data)
 }
 
 // SessionManager is the central registry for all sessions and tabs.
@@ -616,11 +635,10 @@ func (m *SessionManager) DisconnectTabOwner(tabID string) {
 	tokens := make(map[string]bool, len(clients))
 	for _, tc := range clients {
 		tokens[tc.token] = true
-		msg, _ := json.Marshal(map[string]string{
+		tc.send(map[string]string{
 			"type":   "disconnected",
 			"reason": "takeover",
 		})
-		tc.conn.WriteMessage(websocket.TextMessage, msg)
 		tc.conn.Close()
 	}
 
@@ -639,6 +657,38 @@ func (m *SessionManager) DisconnectTabOwner(tabID string) {
 			tabID,
 		)
 	}
+}
+
+// ResumeTabClient lets a browser that lost its tab connection (a phone
+// page frozen in the background, a network blip) take its ownership back
+// without the conflict prompt: if a registered client of this tab holds
+// token, that client is replaced by one on conn with the SAME token, so the
+// pane connections the page reopens with its old token are still accepted.
+// It returns nil when no client holds the token; the caller then runs the
+// normal ownership flow.
+func (m *SessionManager) ResumeTabClient(tabID, token string, conn *websocket.Conn) *tabClient {
+	if token == "" {
+		return nil
+	}
+	m.mu.Lock()
+	var old *tabClient
+	var idx int
+	for i, tc := range m.tabClients[tabID] {
+		if tc.token == token {
+			old, idx = tc, i
+			break
+		}
+	}
+	if old == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	tc := &tabClient{conn: conn, tabID: tabID, token: token}
+	m.tabClients[tabID][idx] = tc
+	m.mu.Unlock()
+	old.conn.Close()
+	log.Printf("tab-ws: client resumed ownership of tab %s", tabID)
+	return tc
 }
 
 // RegisterTabClient adds a tab WS client to the tracking map.
@@ -698,7 +748,7 @@ func (m *SessionManager) BroadcastTabEvent(tabID string, msg interface{}) {
 	m.mu.RUnlock()
 
 	for _, tc := range clients {
-		tc.conn.WriteMessage(websocket.TextMessage, data)
+		tc.sendRaw(websocket.TextMessage, data)
 	}
 }
 
