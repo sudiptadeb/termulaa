@@ -66,7 +66,7 @@
     return {
       cursorBlink: settings.cursorBlink !== false,
       cursorStyle: settings.cursorStyle || 'block',
-      fontSize: settings.fontSize || (window.TERMINAL_DEFAULTS && window.TERMINAL_DEFAULTS.fontSize) || 14,
+      fontSize: deviceFontSize() || settings.fontSize || (window.TERMINAL_DEFAULTS && window.TERMINAL_DEFAULTS.fontSize) || 14,
       fontFamily: settings.fontFamily ||
         (window.TERMINAL_DEFAULTS && window.TERMINAL_DEFAULTS.fontFamily) ||
         "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
@@ -76,6 +76,87 @@
       // room for it plus what streams in afterwards.
       scrollback: 5000,
     };
+  }
+
+  // ── Font size (per device) ──────────────────────────────────────────────────
+  // The server setting is shared by every browser; a phone wants a smaller
+  // size than a desktop so the same output does not wrap. The override lives
+  // in this browser only. Pinch on the terminal or the A-/A+ keys change it.
+
+  var FONT_MIN = 8, FONT_MAX = 32;
+
+  function deviceFontSize() {
+    try {
+      var v = parseInt(localStorage.getItem('terminalFontSize'), 10);
+      if (v >= FONT_MIN && v <= FONT_MAX) return v;
+    } catch (e) { /* private mode */ }
+    return 0;
+  }
+
+  function currentFontSize() {
+    var pane = activePane || (root && firstLeaf(root));
+    return (pane && pane.term.options.fontSize) || getTerminalOptions().fontSize;
+  }
+
+  function setFontSize(size) {
+    size = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(size)));
+    if (size === currentFontSize()) return;
+    try { localStorage.setItem('terminalFontSize', String(size)); } catch (e) { /* private mode */ }
+    if (root) {
+      walkLeaves(root, function(pane) {
+        if (!pane.disposed) pane.term.options.fontSize = size;
+      });
+    }
+    refitAll();
+    showFontSizeHint(size);
+  }
+
+  function adjustFontSize(delta) { setFontSize(currentFontSize() + delta); }
+
+  var fontHintTimer = null;
+  function showFontSizeHint(size) {
+    var el = document.getElementById('font-size-hint');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'font-size-hint';
+      document.body.appendChild(el);
+    }
+    el.textContent = size + 'px';
+    el.classList.add('visible');
+    if (fontHintTimer) clearTimeout(fontHintTimer);
+    fontHintTimer = setTimeout(function() { el.classList.remove('visible'); }, 700);
+  }
+
+  function firstLeaf(node) {
+    while (node && node.type === 'split') node = node.first;
+    return node;
+  }
+
+  // Two-finger pinch over the terminal scales the font. Steps of ~12% of the
+  // start distance move one pixel so the gesture feels continuous but the
+  // result stays an integer size.
+  function initPinchZoom(container) {
+    var startDist = 0, startSize = 0;
+    function dist(t) {
+      var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    container.addEventListener('touchstart', function(e) {
+      if (e.touches.length === 2) {
+        startDist = dist(e.touches);
+        startSize = currentFontSize();
+      }
+    }, { passive: true });
+    container.addEventListener('touchmove', function(e) {
+      if (e.touches.length !== 2 || !startDist) return;
+      e.preventDefault();
+      var ratio = dist(e.touches) / startDist;
+      var target = Math.round(startSize * ratio);
+      if (target !== currentFontSize()) setFontSize(target);
+    }, { passive: false });
+    container.addEventListener('touchend', function(e) {
+      if (e.touches.length < 2) startDist = 0;
+    }, { passive: true });
   }
 
   // ── Scrollback Cleanup ──────────────────────────────────────────────────────
@@ -1079,22 +1160,34 @@
   // Android's soft keyboard has no Tab / Esc / Ctrl / arrows, so touch devices
   // get an accessory key row docked above the keyboard (the Termux model).
 
-  var KEYBAR_KEYS = [
-    { label: 'Tab', key: 'Tab', keyCode: 9, code: 'Tab' },
-    { label: 'Esc', key: 'Escape', keyCode: 27, code: 'Escape' },
-    { label: '⏎', aria: 'Enter', key: 'Enter', keyCode: 13, code: 'Enter' },
-    { label: 'Ctrl', mod: 'ctrl' },
-    { label: '↑', aria: 'Arrow up', key: 'ArrowUp', keyCode: 38, code: 'ArrowUp' },
-    { label: '↓', aria: 'Arrow down', key: 'ArrowDown', keyCode: 40, code: 'ArrowDown' },
-    { label: '←', aria: 'Arrow left', key: 'ArrowLeft', keyCode: 37, code: 'ArrowLeft' },
-    { label: '→', aria: 'Arrow right', key: 'ArrowRight', keyCode: 39, code: 'ArrowRight' },
-    { label: 'Alt', mod: 'alt' },
-    { label: '|', text: '|' },
-    { label: '~', text: '~' },
-    { label: '/', text: '/' },
-    { label: '-', text: '-' },
-    { label: '_', text: '_' },
-    { label: '`', text: '`' },
+  // Two rows; each row scrolls sideways on a narrow screen, so the keys
+  // used most in a shell sit at the left where they are always visible.
+  var KEYBAR_ROWS = [
+    [
+      { label: 'Esc', key: 'Escape', keyCode: 27, code: 'Escape' },
+      { label: 'Tab', key: 'Tab', keyCode: 9, code: 'Tab' },
+      { label: 'Ctrl', mod: 'ctrl' },
+      { label: '↑', aria: 'Arrow up', key: 'ArrowUp', keyCode: 38, code: 'ArrowUp' },
+      { label: '↓', aria: 'Arrow down', key: 'ArrowDown', keyCode: 40, code: 'ArrowDown' },
+      { label: '←', aria: 'Arrow left', key: 'ArrowLeft', keyCode: 37, code: 'ArrowLeft' },
+      { label: '→', aria: 'Arrow right', key: 'ArrowRight', keyCode: 39, code: 'ArrowRight' },
+      { label: '⏎', aria: 'Enter', key: 'Enter', keyCode: 13, code: 'Enter' },
+      { label: 'PgUp', aria: 'Page up', key: 'PageUp', keyCode: 33, code: 'PageUp' },
+      { label: 'PgDn', aria: 'Page down', key: 'PageDown', keyCode: 34, code: 'PageDown' },
+    ],
+    [
+      { label: 'Alt', mod: 'alt' },
+      { label: '/', text: '/' },
+      { label: '-', text: '-' },
+      { label: '|', text: '|' },
+      { label: '~', text: '~' },
+      { label: '_', text: '_' },
+      { label: '`', text: '`' },
+      { label: 'Home', key: 'Home', keyCode: 36, code: 'Home' },
+      { label: 'End', key: 'End', keyCode: 35, code: 'End' },
+      { label: 'A−', aria: 'Smaller text', action: function() { adjustFontSize(-1); }, cls: 'keybar-font' },
+      { label: 'A+', aria: 'Larger text', action: function() { adjustFontSize(1); }, cls: 'keybar-font' },
+    ],
   ];
 
   // Modifier state: 0 = off, 1 = one-shot (applies to next key), 2 = locked.
@@ -1232,10 +1325,12 @@
   function keybarButton(def) {
     var btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'keybar-key' + (def.mod ? ' keybar-mod' : '');
+    btn.className = 'keybar-key' + (def.mod ? ' keybar-mod' : '') + (def.cls ? ' ' + def.cls : '');
     btn.textContent = def.label;
     if (def.aria) btn.setAttribute('aria-label', def.aria);
-    if (def.mod) {
+    if (def.action) {
+      wireKeybarButton(btn, def.action);
+    } else if (def.mod) {
       btn.setAttribute('aria-pressed', 'false');
       keybarModBtns[def.mod] = btn;
       wireKeybarButton(btn, function() { tapKeybarMod(def.mod); });
@@ -1288,9 +1383,18 @@
     bar.id = 'keybar';
     bar.setAttribute('role', 'toolbar');
     bar.setAttribute('aria-label', 'Terminal keys');
-    for (var i = 0; i < KEYBAR_KEYS.length; i++) {
-      bar.appendChild(keybarButton(KEYBAR_KEYS[i]));
+    var rows = [];
+    for (var r = 0; r < KEYBAR_ROWS.length; r++) {
+      var rowEl = document.createElement('div');
+      rowEl.className = 'keybar-row';
+      for (var i = 0; i < KEYBAR_ROWS[r].length; i++) {
+        rowEl.appendChild(keybarButton(KEYBAR_ROWS[r][i]));
+      }
+      bar.appendChild(rowEl);
+      rows.push(rowEl);
     }
+    // The help and hide buttons pin to the right end of the first row.
+    var firstRow = rows[0];
     // On touch the fixed-corner hint would collide with the bar / keyboard,
     // so the shortcut guide lives here instead (see body.touch-ui CSS).
     var helpBtn = document.createElement('button');
@@ -1305,7 +1409,7 @@
       e.preventDefault();
       toggleShortcutsOverlay();
     });
-    bar.appendChild(helpBtn);
+    firstRow.appendChild(helpBtn);
 
     var hideBtn = document.createElement('button');
     hideBtn.type = 'button';
@@ -1313,8 +1417,9 @@
     hideBtn.textContent = '✕';
     hideBtn.setAttribute('aria-label', 'Hide key bar');
     wireKeybarButton(hideBtn, function() { setKeybarHidden(true, true); });
-    bar.appendChild(hideBtn);
+    firstRow.appendChild(hideBtn);
     document.body.appendChild(bar);
+    initPinchZoom(rootContainer);
 
     var showBtn = document.createElement('button');
     showBtn.type = 'button';

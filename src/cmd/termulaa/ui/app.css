@@ -62,7 +62,7 @@ html, body { height: 100%; overflow: hidden; background: #1e1e1e; color: #ccc; f
 .takeover-content button:hover { background: #005f99; }
 
 /* ── Mobile Key Bar (touch devices only) ──────────────────────────────── */
-:root { --keybar-h: 44px; --vv-h: 100%; --vv-top: 0px; }
+:root { --keybar-h: 82px; --vv-h: 100%; --vv-top: 0px; }
 body.keybar-hidden { --keybar-h: 0px; }
 
 /* Terminal shrinks to the visual viewport minus the bar, so the prompt is
@@ -85,17 +85,45 @@ body.touch-ui #terminal-container {
   height: var(--keybar-h);
   top: calc(var(--vv-top) + var(--vv-h) - var(--keybar-h));
   z-index: 500;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 0;
   background: #252526;
   border-top: 1px solid #333;
+  overflow: hidden;
+}
+/* Each row scrolls sideways on its own so the left-most keys of both rows
+   stay reachable on a narrow screen. */
+.keybar-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
-#keybar::-webkit-scrollbar { display: none; }
+.keybar-row::-webkit-scrollbar { display: none; }
+.keybar-font { color: #9cdcfe; }
+
+#font-size-hint {
+  position: fixed;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: rgba(37, 37, 38, 0.92);
+  color: #e0e0e0;
+  font-size: 22px;
+  font-family: -apple-system, sans-serif;
+  z-index: 600;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+#font-size-hint.visible { opacity: 1; }
 
 .keybar-key {
   flex: none;
