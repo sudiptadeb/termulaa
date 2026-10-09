@@ -10,4 +10,4 @@ require (
 	github.com/xtaci/smux v1.5.34
 )
 
-require github.com/sudiptadeb/upkeep v0.1.1
+require github.com/sudiptadeb/upkeep v0.1.2
