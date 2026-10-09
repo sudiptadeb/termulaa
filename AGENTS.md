@@ -192,8 +192,8 @@ xterm.js the reconnected screen is wrong.
 
 ## Don't do
 
-- Don't introduce new deps lightly. Three is the current total
-  (`xtaci/smux` being the justified third — see Design philosophy).
+- Don't introduce new deps lightly. Four is the current total
+  (`xtaci/smux` and `sudiptadeb/upkeep` justified — see Design philosophy).
   Adding another needs a real justification.
 - Don't add frameworks to the frontend. Plain HTML + Alpine + Twind is
   the aesthetic.

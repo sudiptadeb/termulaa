@@ -38,15 +38,6 @@ curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh
 Detects OS (linux/darwin) and arch (amd64/arm64), installs to
 `~/.local/bin/termulaa`.
 
-Re-running the same command upgrades in place: it compares
-`termulaa -version` against the latest release, replaces the binary
-only when they differ, and restarts anything the service manager runs
-(server first, then the tunnel agent) so the new version is actually
-live. A `termulaa` you started by hand keeps running the old binary —
-the installer tells you which processes those are, but never kills
-them; restart them yourself. Pass `--no-restart` to stage the binary
-without touching anything running.
-
 Install, pair and keep the tunnel agent running in one command (see
 [Remote access](#remote-access) and
 [Run it as a service](#run-it-as-a-service)):
@@ -55,6 +46,35 @@ Install, pair and keep the tunnel agent running in one command (see
 curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh \
   | bash -s -- --service --rc-server https://your.server --rc-token <token>
 ```
+
+### Updating
+
+Nothing updates by itself. There are two ways, both run by you:
+
+**Re-run the install command.** This is the full update. It compares
+`termulaa -version` against the latest release and replaces the binary
+only when they differ. With `--service` it restarts the tunnel agent
+onto the new binary and leaves a terminal server that is already on the
+installed version untouched, so open terminals survive; with
+`--rc-token` it also re-pairs. Without `--service` it restarts whatever
+the service manager runs (server first, then the tunnel agent). A
+`termulaa` you started by hand keeps running the old binary — the
+installer names those processes but never kills them. Pass
+`--no-restart` to stage the binary without touching anything running.
+
+**`termulaa --update-check`.** termulaa updates itself through
+[upkeep](https://github.com/sudiptadeb/upkeep): it fetches the
+project's release manifest (`upkeep.json` on the latest GitHub
+release), downloads the newest version for this platform, verifies its
+size and sha256, smoke-tests it, swaps it in (keeping the old binary as
+`termulaa.prev`) and re-execs into it with the same arguments — so
+`termulaa --update-check -version` updates, prints the new version and
+exits, while a bare `termulaa --update-check` goes on to start the
+terminal server. Services already running keep the old binary until you
+restart them. `--update-url <manifest>` points it at a mirror.
+`--auto-update` keeps checking in the background; it is off by default
+and only sensible for the `-rc` agent until the server can hand its
+terminals across a restart.
 
 ### Manual
 
@@ -359,10 +379,12 @@ resources/service/   # systemd user unit + launchd plist templates
 resources/images/    # README screenshots + GIFs
 ```
 
-Three Go dependencies: [`creack/pty`](https://github.com/creack/pty),
-[`gorilla/websocket`](https://github.com/gorilla/websocket), and
+Four Go dependencies: [`creack/pty`](https://github.com/creack/pty),
+[`gorilla/websocket`](https://github.com/gorilla/websocket),
 [`xtaci/smux`](https://github.com/xtaci/smux) (multiplexes remote-access
-viewers over the `-rc` tunnel pool). Frontend is vendored — Alpine.js,
+viewers over the `-rc` tunnel pool), and
+[`sudiptadeb/upkeep`](https://github.com/sudiptadeb/upkeep) (opt-in
+self-update from the release manifest, configured by `upkeep.config`). Frontend is vendored — Alpine.js,
 Twind, xterm.js + addons — no npm, no bundler, no build step.
 
 ## Runtime state
