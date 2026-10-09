@@ -36,7 +36,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sudiptadeb/upkeep"
+	"github.com/sudiptadeb/amarit"
 )
 
 var Version = "dev"
@@ -130,9 +130,9 @@ func saveFullConfig(cfg *FullConfig) error {
 }
 
 func main() {
-	// Self-update and keep-alive. Reads the upkeep.config stamped into the
-	// binary by build/build.sh; inert without --auto-update or --update-check.
-	upkeep.Start()
+	// Self-update. Reads the amarit.json stamped in by build/build.sh; inert
+	// unless run with --auto-update, --update-check or `termulaa update`.
+	amarit.Start()
 
 	portFlag := flag.Int("port", 0, "listen port (overrides config)")
 	rcFlag := flag.Bool("rc", false, "run the remote-access reverse tunnel agent (dials out to a rendezvous server; see docs/rc-protocol.md)")

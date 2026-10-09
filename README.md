@@ -63,8 +63,8 @@ installer names those processes but never kills them. Pass
 `--no-restart` to stage the binary without touching anything running.
 
 **`termulaa update`.** termulaa updates itself through
-[upkeep](https://github.com/sudiptadeb/upkeep): it fetches the release
-manifest (`upkeep.json` on the latest GitHub release), downloads the newest
+[amarit](https://github.com/sudiptadeb/amarit): it fetches the release
+manifest (`releases.json` on the latest GitHub release), downloads the newest
 version for this platform, checks size and sha256, smoke-tests it, swaps it
 in keeping `termulaa.prev`, and re-execs; then it prints the version and
 exits. Running services keep the old binary until restarted. `--update-url
@@ -379,8 +379,8 @@ Four Go dependencies: [`creack/pty`](https://github.com/creack/pty),
 [`gorilla/websocket`](https://github.com/gorilla/websocket),
 [`xtaci/smux`](https://github.com/xtaci/smux) (multiplexes remote-access
 viewers over the `-rc` tunnel pool), and
-[`sudiptadeb/upkeep`](https://github.com/sudiptadeb/upkeep) (opt-in
-self-update from the release manifest, configured by `upkeep.config`). Frontend is vendored — Alpine.js,
+[`sudiptadeb/amarit`](https://github.com/sudiptadeb/amarit) (opt-in
+self-update from the release manifest, configured by `amarit.json`). Frontend is vendored — Alpine.js,
 Twind, xterm.js + addons — no npm, no bundler, no build step.
 
 ## Runtime state

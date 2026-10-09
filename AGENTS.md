@@ -55,8 +55,8 @@ Full threat model in [SECURITY.md](SECURITY.md). Short version:
 frameworks. Four Go deps: `creack/pty`, `gorilla/websocket`,
 `xtaci/smux` (justified third: multiplexes all `-rc` viewer connections
 over a small pool of outbound tunnels; hand-rolled stream framing would
-be riskier) and `sudiptadeb/upkeep` (self-update from the release
-manifest and keep-alive; `upkeep.config` at the repo root is its only
+be riskier) and `sudiptadeb/amarit` (self-update from the release
+manifest and keep-alive; `amarit.json` at the repo root is its only
 configuration, stamped in by `build/build.sh`). Frontend is vendored — no npm, no bundler, no build step.
 The terminal emulator in `src/internal/vterm` is written in-repo for the
 same reason: it adds no dependency, and its fidelity is checked against
@@ -193,7 +193,7 @@ xterm.js the reconnected screen is wrong.
 ## Don't do
 
 - Don't introduce new deps lightly. Four is the current total
-  (`xtaci/smux` and `sudiptadeb/upkeep` justified — see Design philosophy).
+  (`xtaci/smux` and `sudiptadeb/amarit` justified — see Design philosophy).
   Adding another needs a real justification.
 - Don't add frameworks to the frontend. Plain HTML + Alpine + Twind is
   the aesthetic.
