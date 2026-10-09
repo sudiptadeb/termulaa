@@ -24,8 +24,12 @@ if [ ! -x "$bin" ]; then
     exit 1
 fi
 
+# Pin the installer to the version the built binary reports (an untagged
+# build says v0.5.2-dev+sha), so it never reaches for a GitHub release and
+# the test works offline and before the release of this very version exists.
 export INSTALL_DIR="$HOME/.local/bin"
-export VERSION="$ver"
+export VERSION
+VERSION="$("$bin" -version)"
 mkdir -p "$INSTALL_DIR"
 cp "$bin" "$INSTALL_DIR/termulaa"
 
