@@ -3,10 +3,14 @@ package com.debkosh.termulaa.net
 import com.debkosh.termulaa.core.Urls
 import com.debkosh.termulaa.ui.describePairError
 import kotlinx.coroutines.test.runTest
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -393,5 +397,24 @@ class MemdClientTest {
         server.enqueue(jsonResponse(agentsBody))
         client.agents()
         assertNull(server.takeRequest().getHeader("Cookie"))
+    }
+
+    // Regression: the body was read on the caller's thread (Main in the app),
+    // so a body still in flight threw NetworkOnMainThreadException and the
+    // app died, typically right after back from a terminal re-polled Machines.
+    @Test
+    fun `response body is read off the caller's thread`() = runTest {
+        var bodyReadOn: Thread? = null
+        val http = OkHttpClient.Builder().eventListener(object : EventListener() {
+            override fun responseBodyEnd(call: Call, byteCount: Long) {
+                bodyReadOn = Thread.currentThread()
+            }
+        }).build()
+        val base = (Urls.normalizeBase(server.url("/").toString()) as Urls.BaseResult.Ok).base
+        val c = MemdClient(baseProvider = { base }, creds = secrets, cookieJar = cookieJar, client = http)
+        server.enqueue(jsonResponse(agentsBody))
+
+        assertTrue(c.agents() is Outcome.Ok)
+        assertNotEquals(Thread.currentThread(), bodyReadOn)
     }
 }

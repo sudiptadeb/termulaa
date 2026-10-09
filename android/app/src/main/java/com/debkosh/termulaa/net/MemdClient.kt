@@ -21,6 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -367,8 +368,23 @@ class MemdClient(
         }
     }
 
+    /**
+     * Runs the call AND reads the whole body on IO. Callers parse on Main
+     * (viewModelScope); a body still in flight would otherwise be read from
+     * the socket there, and NetworkOnMainThreadException kills the app.
+     */
     private suspend fun execute(request: Request): Response =
-        runInterruptible(Dispatchers.IO) { http.newCall(request).execute() }
+        runInterruptible(Dispatchers.IO) {
+            val resp = http.newCall(request).execute()
+            val body = resp.body ?: return@runInterruptible resp
+            val bytes = try {
+                body.bytes() // reads to the end and closes the socket source
+            } catch (e: IOException) {
+                resp.close()
+                throw e
+            }
+            resp.newBuilder().body(bytes.toResponseBody(body.contentType())).build()
+        }
 
     companion object {
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()

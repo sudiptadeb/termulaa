@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.net.toUri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +66,10 @@ fun TermulaaNav(
     // Notification deep-link: navigate whenever MainActivity hands us an id.
     LaunchedEffect(pendingMachineId) {
         if (pendingMachineId != null) {
-            nav.navigate(Routes.terminal(pendingMachineId)) { launchSingleTop = true }
+            nav.navigate(Routes.terminal(pendingMachineId)) {
+                popUpTo(Routes.MACHINES) // Settings or an older terminal: drop them
+                launchSingleTop = true
+            }
             onDeepLinkConsumed()
         }
     }
@@ -189,9 +193,18 @@ fun TermulaaNav(
             val vm: TerminalViewModel =
                 viewModel(initializer = { TerminalViewModel(graph) })
             val state by vm.state.collectAsState()
+            // Back from a terminal always lands on Machines, even when nothing
+            // is beneath it (only a back from Machines leaves the app).
+            val toMachines: () -> Unit = {
+                if (!nav.popBackStack(Routes.MACHINES, inclusive = false)) {
+                    nav.navigate(Routes.MACHINES) { popUpTo(0) { inclusive = true } }
+                }
+            }
+            // Loading / offline / failed states; TerminalScreen has its own.
+            BackHandler(onBack = toMachines)
 
             LaunchedEffect(machineId) {
-                if (machineId.isBlank()) nav.popBackStack() else vm.load(machineId)
+                if (machineId.isBlank()) toMachines() else vm.load(machineId)
             }
             // Leaving the terminal also bumps the seen watermark.
             DisposableEffect(machineId) {
@@ -203,7 +216,7 @@ fun TermulaaNav(
                 is TerminalState.Ready -> TerminalScreen(
                     label = s.label,
                     terminalUrl = s.url,
-                    onBack = { nav.popBackStack() },
+                    onBack = toMachines,
                     onAuthFailed = { vm.reloginForWebView() },
                 )
                 is TerminalState.Gone -> CenteredMessage {
@@ -213,13 +226,13 @@ fun TermulaaNav(
                         color = Palette.Dim,
                         modifier = Modifier.padding(top = 6.dp),
                     )
-                    Button(onClick = { nav.popBackStack() }, modifier = Modifier.padding(top = 18.dp)) {
+                    Button(onClick = toMachines, modifier = Modifier.padding(top = 18.dp)) {
                         Text("Back")
                     }
                 }
                 is TerminalState.Failed -> CenteredMessage {
                     Text(s.message, color = Palette.Red)
-                    Button(onClick = { nav.popBackStack() }, modifier = Modifier.padding(top = 18.dp)) {
+                    Button(onClick = toMachines, modifier = Modifier.padding(top = 18.dp)) {
                         Text("Back")
                     }
                 }
