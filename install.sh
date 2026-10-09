@@ -455,6 +455,12 @@ report_failures_and_exit() {
     fi
 }
 
+print_update_hint() {
+    echo
+    echo "To update later: re-run this command, or 'termulaa --update-check -version'"
+    echo "(then restart the services)."
+}
+
 # ── Service setup (--service) ───────────────────────────────────────────────
 # The unit/plist bodies below mirror resources/service/ in the repo, with
 # the @TERMULAA_BIN@ / @HOME@ placeholders filled in — this script must
@@ -785,6 +791,7 @@ if [ "$SERVICE" = 1 ]; then
     report_failures_and_exit
     echo
     echo "Open http://127.0.0.1:17380/"
+    print_update_hint
     exit 0
 fi
 
@@ -801,6 +808,7 @@ if [ "$RESTART" = 0 ]; then
         echo "     launchctl kickstart -k gui/\$UID/com.termulaa.rc"
     fi
     echo "     (plus any termulaa you started by hand)"
+    print_update_hint
     exit 0
 fi
 
@@ -831,3 +839,4 @@ else
     echo "  termulaa"
     echo "Then open http://127.0.0.1:17380/"
 fi
+print_update_hint
