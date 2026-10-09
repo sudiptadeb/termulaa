@@ -34,8 +34,15 @@ jobs:
         working-directory: src
         run: go vet ./...
 
+      - name: go test
+        working-directory: src
+        run: go test ./...
+
       - name: go build
         run: bash build/build.sh
+
+      - name: installer smoke test
+        run: bash resources/scripts/installer-smoke.sh
 
       - name: list artifacts
         run: ls -la dist/*/ || true

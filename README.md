@@ -47,6 +47,15 @@ the installer tells you which processes those are, but never kills
 them; restart them yourself. Pass `--no-restart` to stage the binary
 without touching anything running.
 
+Install, pair and keep the tunnel agent running in one command (see
+[Remote access](#remote-access) and
+[Run it as a service](#run-it-as-a-service)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh \
+  | bash -s -- --service --rc-server https://your.server --rc-token <token>
+```
+
 ### Manual
 
 Grab the binary for your platform from the
@@ -110,7 +119,11 @@ Pairing:
 2. Open `<rendezvous>/rc` in a browser, sign in, mint a tunnel token.
 3. Run `termulaa -rc` on the same machine and paste the token when
    prompted. It persists to `~/.termulaa/rc.json` along with the server
-   URL; later runs reconnect without prompting.
+   URL; later runs reconnect without prompting. `termulaa -rc` stays in
+   the foreground and stops with its terminal — to pair without running
+   it, use `termulaa -rc-save -rc-token <token>`, which saves the
+   settings and exits, then let a [service](#run-it-as-a-service) run
+   the agent.
 4. Open your terminal from the rendezvous in any browser — either a
    link on its `/rc` page (path-prefix serving) or its dedicated view
    host with the pairing link it gives you, depending on how the
@@ -120,7 +133,11 @@ The token is an opaque string to termulaa — it is stored and presented
 verbatim, never parsed. Tokens expire by design (the rendezvous decides
 when); when one does, the agent stops with a message pointing at
 `<rendezvous>/rc`. Mint a fresh token and run `-rc` again with
-`-rc-token <new token>`.
+`-rc-token <new token>`, or re-run the installer with `--rc-token`.
+
+Prefer the saved pairing over flags once a machine is paired: a token
+passed as `-rc-token` sits on the agent's command line, readable by
+every local user in `ps`, for as long as the agent runs.
 
 ### From a phone
 
@@ -202,16 +219,48 @@ placeholders).
 token, and under systemd/launchd there is no terminal to prompt on — it
 exits immediately with `no token entered`. So the installer starts the
 terminal server right away but leaves the agent service installed,
-*not* started, until `~/.termulaa/rc.json` holds a token. The flow:
+*not* started, until `~/.termulaa/rc.json` holds a token. Give the
+installer the token and it does all three steps — save the pairing,
+install the services, start the agent:
 
-1. `install.sh --service` — server service up, agent service installed.
-2. Run `termulaa -rc` once in a terminal and paste a token (see
-   [Remote access](#remote-access)). Ctrl-C it after it connects.
-3. Start the agent service (commands below) — or just re-run
-   `install.sh --service`, which now finds the token and starts it.
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh \
+  | bash -s -- --service --rc-server https://your.server --rc-token <token> --rc-label my-box
+```
 
-When a token expires the agent exits the same way; mint a fresh one, run
-`termulaa -rc -rc-token <new token>` once, and restart the service.
+When a token expires the agent exits the same way; mint a fresh one and
+run that command again with it. A terminal server that is already on
+the installed version is left alone on every re-run, because restarting
+it closes the terminals it holds — only the tunnel agent is restarted.
+
+### What keeps running
+
+| Started as | Close the terminal | Log out | Restart the machine |
+|---|---|---|---|
+| macOS LaunchAgents | keeps running | stops | starts when you log in at the desktop |
+| Linux systemd user units | keeps running | keeps running | starts at boot, no login needed |
+| WSL2 systemd user units | stops soon after the last WSL window closes | stops | starts when WSL is next started |
+| Detached (no service manager) | keeps running | keeps running | stays down until you re-run the installer |
+
+**Detached** is what `--service` falls back to where no per-user service
+manager can serve the account: SSH into a Mac account that is not logged
+in at the desktop (launchd has no `gui/<uid>` domain for it), or a Linux
+login without a systemd user session. The installer says so, starts the
+terminal server and the tunnel agent with `nohup`, and logs to
+`~/.termulaa/logs/`. It replaces only the tunnel agent it started itself
+(tracked in `~/.termulaa/rc.pid`); an agent you started by hand is
+reported and left alone. Stop everything with `pkill -x termulaa`.
+
+On a Mac, per-user services start only when that user logs in at the
+desktop — an SSH login does not count, and with FileVault on nothing
+starts until the disk is unlocked. To start at boot with nobody logged
+in, run termulaa as a LaunchDaemon instead (needs sudo): copy the two
+plists from `~/Library/LaunchAgents/` to `/Library/LaunchDaemons/`, add
+a `UserName` key with your account and an `EnvironmentVariables` dict
+setting `HOME`, `chown root:wheel` them, and load each with
+`sudo launchctl bootstrap system <plist>`. Terminals started that way
+run outside your desktop session, so they cannot reach your login
+keychain.
 
 ### Linux (systemd user units)
 
@@ -220,7 +269,8 @@ Units are written to `~/.config/systemd/user/`. The installer also runs
 logout and start at boot; if that fails it prints the command for you to
 run yourself. `systemctl --user` needs a systemd user session — where
 there is none (some containers and SSH setups), the installer says so
-and leaves you with the plain binary.
+and starts termulaa detached instead (see
+[What keeps running](#what-keeps-running)).
 
 ```bash
 systemctl --user enable --now termulaa-rc      # after pairing

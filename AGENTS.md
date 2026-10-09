@@ -184,7 +184,8 @@ xterm.js the reconnected screen is wrong.
 | `build/build.sh` | Cross-compile to `dist/<os>/` |
 | `install.sh` | Release installer; `--service` sets up user services |
 | `resources/service/` | systemd user unit + launchd plist templates |
-| `.github/workflows/build.yml` | gofmt, go vet, build on push/PR |
+| `resources/scripts/installer-smoke.sh` | CI check of `install.sh`: pair, start, re-run keeps the server |
+| `.github/workflows/build.yml` | gofmt, go vet, go test, build, installer smoke test on push/PR |
 | `.github/workflows/release.yml` | Release on tag push |
 
 ## Don't do
