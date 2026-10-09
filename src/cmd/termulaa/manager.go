@@ -7,7 +7,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -215,6 +218,52 @@ func (m *SessionManager) LoadState() {
 	}
 }
 
+// Adopt takes over the PTYs a previous incarnation handed across an
+// in-place restart (names "pty:<session id>:<pid>"), so the shells in
+// them keep running through an update. Call after LoadState.
+func (m *SessionManager) Adopt(files []*os.File) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	adopted := 0
+	for _, f := range files {
+		parts := strings.Split(f.Name(), ":")
+		if len(parts) != 3 || parts[0] != "pty" {
+			continue
+		}
+		pid, err := strconv.Atoi(parts[2])
+		old, ok := m.sessions[parts[1]]
+		if err != nil || !ok || pid <= 0 {
+			f.Close()
+			continue
+		}
+		if err := syscall.Kill(pid, 0); err != nil {
+			f.Close() // the shell died in the gap; the session stays dead
+			continue
+		}
+		m.sessions[parts[1]] = AdoptSession(old.Meta(), f, pid, old.scrollback, old.term)
+		adopted++
+	}
+	if adopted > 0 {
+		log.Printf("manager: adopted %d live sessions across the restart", adopted)
+	}
+	return adopted
+}
+
+// HandoffFiles returns the PTY master of every live session, named for
+// Adopt, and saves state so the next incarnation can rebuild the pictures.
+func (m *SessionManager) HandoffFiles() []*os.File {
+	m.SaveState()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var files []*os.File
+	for _, s := range m.sessions {
+		if f := s.HandoffFile(); f != nil {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
 // SaveState persists all session metadata and tab data to state.json.
 // For alive sessions, scrollback is also saved to disk.
 func (m *SessionManager) SaveState() {
@@ -263,6 +312,13 @@ func (m *SessionManager) Start(ctx context.Context) {
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	go m.periodicSave()
 	go m.pollCWDs()
+}
+
+// Pause stops the background goroutines and saves state without killing
+// anything: what a restart that keeps its sessions needs.
+func (m *SessionManager) Pause() {
+	m.cancel()
+	m.SaveState()
 }
 
 // Stop cancels background goroutines, saves state, and kills all alive sessions.
@@ -323,14 +379,14 @@ func (m *SessionManager) pollCWDs() {
 			m.mu.RLock()
 			sessions := make([]*Session, 0)
 			for _, s := range m.sessions {
-				if s.Alive && s.cmd != nil && s.cmd.Process != nil {
+				if s.Alive && s.pid != 0 {
 					sessions = append(sessions, s)
 				}
 			}
 			m.mu.RUnlock()
 
 			for _, s := range sessions {
-				cwd, err := getCWD(s.cmd.Process.Pid)
+				cwd, err := getCWD(s.pid)
 				if err == nil && cwd != "" {
 					s.mu.Lock()
 					s.CWD = cwd

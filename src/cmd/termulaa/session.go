@@ -376,6 +376,11 @@ type Session struct {
 	cmd        *exec.Cmd
 	pty        *os.File
 	scrollback *RingBuffer
+	// pid and wait describe the shell whichever way it arrived: spawned by
+	// this process, or adopted from a previous one across an in-place
+	// restart (same PID, so this process is still its parent).
+	pid  int
+	wait func() int
 
 	// lastOutput is the unix-nanosecond time of the most recent PTY output
 	// byte (0 = never). Kept as an atomic so readPump can stamp it without
@@ -490,14 +495,76 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 
 		cmd:        cmd,
 		pty:        ptmx,
+		pid:        cmd.Process.Pid,
 		scrollback: NewRingBuffer(scrollbackBytes),
 		term:       term,
 		clients:    make([]*wsClient, 0),
 		done:       make(chan struct{}),
 	}
+	s.wait = func() int {
+		if err := cmd.Wait(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return exitErr.ExitCode()
+			}
+			return 1
+		}
+		return 0
+	}
 
 	go s.readPump()
 	return s, nil
+}
+
+// AdoptSession takes over a shell that an earlier incarnation of this
+// process started: the PTY master arrives across the restart and the shell
+// is still our child, so wait4 reaps it. The picture is rebuilt from the
+// scrollback saved before the restart.
+func AdoptSession(meta SessionMeta, ptmx *os.File, pid int, scrollback *RingBuffer, term *vterm.Terminal) *Session {
+	s := &Session{
+		ID:         meta.ID,
+		CWD:        meta.CWD,
+		Shell:      meta.Shell,
+		Cols:       meta.Cols,
+		Rows:       meta.Rows,
+		Alive:      true,
+		CreatedAt:  meta.CreatedAt,
+		LastActive: time.Now(),
+
+		pty:        ptmx,
+		pid:        pid,
+		scrollback: scrollback,
+		term:       term,
+		clients:    make([]*wsClient, 0),
+		done:       make(chan struct{}),
+	}
+	s.wait = func() int {
+		var ws syscall.WaitStatus
+		for {
+			if _, err := syscall.Wait4(pid, &ws, 0, nil); err == syscall.EINTR {
+				continue
+			} else if err != nil {
+				return 1
+			}
+			break
+		}
+		if ws.Exited() {
+			return ws.ExitStatus()
+		}
+		return 1
+	}
+	go s.readPump()
+	return s
+}
+
+// HandoffFile is the PTY master and the shell's pid, named for the next
+// incarnation to recognise, or nil for a dead session.
+func (s *Session) HandoffFile() *os.File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.Alive || s.pty == nil {
+		return nil
+	}
+	return os.NewFile(s.pty.Fd(), fmt.Sprintf("pty:%s:%d", s.ID, s.pid))
 }
 
 // restoreTerminal rebuilds a terminal for a session loaded from disk by
@@ -542,14 +609,7 @@ func (s *Session) readPump() {
 	}
 
 	// Shell exited — collect exit code.
-	exitCode := 0
-	if err := s.cmd.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = 1
-		}
-	}
+	exitCode := s.wait()
 
 	s.mu.Lock()
 	s.ExitCode = exitCode
@@ -736,11 +796,11 @@ func shellQuotePath(path string) string {
 
 // Kill sends SIGTERM, waits up to 2 seconds, then SIGKILL. Closes the PTY.
 func (s *Session) Kill() {
-	if s.cmd == nil || s.cmd.Process == nil {
+	if s.pid == 0 {
 		return
 	}
 
-	s.cmd.Process.Signal(syscall.SIGTERM)
+	syscall.Kill(s.pid, syscall.SIGTERM)
 
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
@@ -749,7 +809,7 @@ func (s *Session) Kill() {
 	case <-s.done:
 		// Process already exited via readPump.
 	case <-timer.C:
-		s.cmd.Process.Kill()
+		syscall.Kill(s.pid, syscall.SIGKILL)
 	}
 
 	if s.pty != nil {

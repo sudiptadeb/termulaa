@@ -27,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -131,8 +132,14 @@ func saveFullConfig(cfg *FullConfig) error {
 
 func main() {
 	// Self-update. Reads the amarit.json stamped in by build/build.sh; inert
-	// unless run with --auto-update, --update-check or `termulaa update`.
-	amarit.Start()
+	// unless run with --auto-update, --update-check, `termulaa update`, or
+	// as an amarit unit. The server registers its handoff below, once it
+	// has something to hand over.
+	amaritOpts := amarit.Start(
+		amarit.Handoff(func() []*os.File { return handoffFiles() }),
+		amarit.Drain(func(ctx context.Context) { drainForRestart() }),
+	)
+	_ = amaritOpts
 
 	portFlag := flag.Int("port", 0, "listen port (overrides config)")
 	rcFlag := flag.Bool("rc", false, "run the remote-access reverse tunnel agent (dials out to a rendezvous server; see docs/rc-protocol.md)")
@@ -205,7 +212,26 @@ func main() {
 	}
 	mgr := NewSessionManager(mgrCfg)
 	mgr.LoadState()
+
+	// Across an in-place restart the previous incarnation hands over its
+	// listening socket and every live PTY, so the update keeps the shells.
+	var inheritedListener net.Listener
+	var ptys []*os.File
+	for _, f := range amarit.Inherited() {
+		if f.Name() == "listener" {
+			if ln, err := net.FileListener(f); err == nil {
+				inheritedListener = ln
+			} else {
+				log.Printf("inherited listener unusable: %v", err)
+			}
+			f.Close()
+			continue
+		}
+		ptys = append(ptys, f)
+	}
+	mgr.Adopt(ptys)
 	mgr.Start(context.Background())
+	handoffMgr = mgr
 
 	// Set up HTTP routes
 	mux := http.NewServeMux()
@@ -220,13 +246,23 @@ func main() {
 		Handler: securityMiddleware(mux),
 	}
 
+	ln := inheritedListener
+	if ln == nil {
+		var err error
+		if ln, err = net.Listen("tcp", addr); err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
+	} else {
+		log.Printf("termulaa %s resuming on http://%s (listener and sessions carried across the restart)", Version, addr)
+	}
+	handoffListener = ln
 	log.Printf("termulaa %s starting on http://%s", Version, addr)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
@@ -349,4 +385,36 @@ func parseByteSize(s string) int {
 		return 1024 * 1024 // default 1MB
 	}
 	return n * multiplier
+}
+
+// handoffMgr and handoffListener are what an in-place restart carries to
+// the next incarnation; set once the server is up.
+var (
+	handoffMgr      *SessionManager
+	handoffListener net.Listener
+)
+
+// handoffFiles is amarit's Handoff hook: the listening socket plus every
+// live PTY master. State is saved first so the pictures can be rebuilt.
+func handoffFiles() []*os.File {
+	var files []*os.File
+	if handoffListener != nil {
+		if tl, ok := handoffListener.(*net.TCPListener); ok {
+			if f, err := tl.File(); err == nil {
+				files = append(files, os.NewFile(f.Fd(), "listener"))
+			}
+		}
+	}
+	if handoffMgr != nil {
+		files = append(files, handoffMgr.HandoffFiles()...)
+	}
+	return files
+}
+
+// drainForRestart is amarit's Drain hook: stop the pollers and save state,
+// but kill nothing; the shells and the socket are about to be handed over.
+func drainForRestart() {
+	if handoffMgr != nil {
+		handoffMgr.Pause()
+	}
 }
