@@ -52,10 +52,12 @@ Full threat model in [SECURITY.md](SECURITY.md). Short version:
 ## Design philosophy
 
 **"Simple is Hard, Easy is Easy"** — small surface, minimal deps, no
-frameworks. Three Go deps: `creack/pty`, `gorilla/websocket`, and
+frameworks. Four Go deps: `creack/pty`, `gorilla/websocket`,
 `xtaci/smux` (justified third: multiplexes all `-rc` viewer connections
 over a small pool of outbound tunnels; hand-rolled stream framing would
-be riskier). Frontend is vendored — no npm, no bundler, no build step.
+be riskier) and `sudiptadeb/upkeep` (self-update from the release
+manifest and keep-alive; `upkeep.config` at the repo root is its only
+configuration, stamped in by `build/build.sh`). Frontend is vendored — no npm, no bundler, no build step.
 The terminal emulator in `src/internal/vterm` is written in-repo for the
 same reason: it adds no dependency, and its fidelity is checked against
 the shipped xterm.js bundle rather than assumed.

@@ -1,6 +1,6 @@
 module github.com/sudiptadeb/termulaa/src
 
-go 1.24.0
+go 1.25
 
 require (
 	github.com/creack/pty v1.1.24
@@ -9,3 +9,5 @@ require (
 	// outbound tunnels; hand-rolling stream framing would be riskier code.
 	github.com/xtaci/smux v1.5.34
 )
+
+require github.com/sudiptadeb/upkeep v0.1.0

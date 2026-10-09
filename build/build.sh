@@ -93,8 +93,12 @@ build_one() {
         EMBED_VERSION="v$VERSION-dev+$GIT_COMMIT$SUFFIX"
     fi
 
+    # upkeep: stamp the project's upkeep.config and version into the binary.
+    local UPKEEP_CONFIG
+    UPKEEP_CONFIG="$(base64 < "$PROJECT_ROOT/upkeep.config" | tr -d '\n')"
+
     if CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
-        -ldflags "-X main.Version=$EMBED_VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -s -w" \
+        -ldflags "-X main.Version=$EMBED_VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT -X github.com/sudiptadeb/upkeep.stampedConfig=$UPKEEP_CONFIG -X github.com/sudiptadeb/upkeep.stampedVersion=${EMBED_VERSION#v} -s -w" \
         -o "$TARGET_DIR/$OUTPUT_NAME" \
         "$CMD_PATH"; then
         [ "$GOOS" != "windows" ] && chmod +x "$TARGET_DIR/$OUTPUT_NAME"

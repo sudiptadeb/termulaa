@@ -35,6 +35,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sudiptadeb/upkeep"
 )
 
 var Version = "dev"
@@ -128,6 +130,10 @@ func saveFullConfig(cfg *FullConfig) error {
 }
 
 func main() {
+	// Self-update and keep-alive. Reads the upkeep.config stamped into the
+	// binary by build/build.sh; inert without --auto-update or --update-check.
+	upkeep.Start()
+
 	portFlag := flag.Int("port", 0, "listen port (overrides config)")
 	rcFlag := flag.Bool("rc", false, "run the remote-access reverse tunnel agent (dials out to a rendezvous server; see docs/rc-protocol.md)")
 	rcServer := flag.String("rc-server", "", "rendezvous base URL for -rc (default from ~/.termulaa/rc.json, else the reference rendezvous)")
