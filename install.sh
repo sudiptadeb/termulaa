@@ -457,7 +457,7 @@ report_failures_and_exit() {
 
 print_update_hint() {
     echo
-    echo "To update later: re-run this command, or 'termulaa --update-check -version'"
+    echo "To update later: re-run this command, or 'termulaa update'"
     echo "(then restart the services)."
 }
 

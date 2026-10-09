@@ -62,18 +62,14 @@ the service manager runs (server first, then the tunnel agent). A
 installer names those processes but never kills them. Pass
 `--no-restart` to stage the binary without touching anything running.
 
-**`termulaa --update-check`.** termulaa updates itself through
-[upkeep](https://github.com/sudiptadeb/upkeep): it fetches the
-project's release manifest (`upkeep.json` on the latest GitHub
-release), downloads the newest version for this platform, verifies its
-size and sha256, smoke-tests it, swaps it in (keeping the old binary as
-`termulaa.prev`) and re-execs into it with the same arguments — so
-`termulaa --update-check -version` updates, prints the new version and
-exits, while a bare `termulaa --update-check` goes on to start the
-terminal server. Services already running keep the old binary until you
-restart them. `--update-url <manifest>` points it at a mirror.
-`--auto-update` keeps checking in the background; it is off by default
-and only sensible for the `-rc` agent until the server can hand its
+**`termulaa update`.** termulaa updates itself through
+[upkeep](https://github.com/sudiptadeb/upkeep): it fetches the release
+manifest (`upkeep.json` on the latest GitHub release), downloads the newest
+version for this platform, checks size and sha256, smoke-tests it, swaps it
+in keeping `termulaa.prev`, and re-execs; then it prints the version and
+exits. Running services keep the old binary until restarted. `--update-url
+<manifest>` points it at a mirror. `--auto-update` exists but is off by
+default, and is only sensible for the `-rc` agent until the server hands its
 terminals across a restart.
 
 ### Manual
