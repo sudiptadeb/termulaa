@@ -159,6 +159,41 @@
     }, { passive: true });
   }
 
+  // xterm only listens for touch on its own screen element, so a one-finger
+  // swipe over the rest of the pane — the empty area below a short buffer, or
+  // below a terminal the keyboard shrank and nothing grew back — scrolled
+  // nothing. Forward those swipes to the buffer, and use the touch as a cue
+  // to refit a terminal that has stopped filling its pane.
+  function initPaneTouchScroll(pane) {
+    var el = pane.element, lastY = null, rest = 0;
+    function rowHeight() {
+      var screen = el.querySelector('.xterm-screen');
+      return screen && pane.term.rows ? screen.clientHeight / pane.term.rows : 0;
+    }
+    el.addEventListener('touchstart', function(e) {
+      if (e.touches.length !== 1) { lastY = null; return; }
+      lastY = e.touches[0].clientY;
+      rest = 0;
+      var screen = el.querySelector('.xterm-screen');
+      if (screen && el.clientHeight - screen.clientHeight > rowHeight()) refitAll();
+    }, { passive: true });
+    el.addEventListener('touchmove', function(e) {
+      if (lastY === null || e.touches.length !== 1) return;
+      if (e.target.closest && e.target.closest('.xterm-screen')) return;
+      var rowH = rowHeight();
+      if (!rowH) return;
+      var dy = lastY - e.touches[0].clientY + rest;
+      lastY = e.touches[0].clientY;
+      var lines = dy > 0 ? Math.floor(dy / rowH) : Math.ceil(dy / rowH);
+      rest = dy - lines * rowH;
+      if (lines) {
+        pane.term.scrollLines(lines);
+        e.preventDefault();
+      }
+    }, { passive: false });
+    el.addEventListener('touchend', function() { lastY = null; }, { passive: true });
+  }
+
   // ── Scrollback Cleanup ──────────────────────────────────────────────────────
 
   function stripQueryResponses(bytes) {
@@ -241,6 +276,8 @@
     el.addEventListener('mousedown', function() {
       setActivePane(pane);
     });
+
+    initPaneTouchScroll(pane);
 
     // Wire terminal input, but defer until scrollback replay completes.
     term.onData(function(data) {
