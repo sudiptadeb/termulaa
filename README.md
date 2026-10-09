@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh
 
 ### Updating
 
-Nothing updates by itself. There are two ways, both run by you:
+Nothing updates by itself unless you ask. Two ways to ask:
 
 **Re-run the install command.** This is the full update. It compares
 `termulaa -version` against the latest release and replaces the binary
@@ -67,10 +67,16 @@ installer names those processes but never kills them. Pass
 manifest (`releases.json` on the latest GitHub release), downloads the newest
 version for this platform, checks size and sha256, smoke-tests it, swaps it
 in keeping `termulaa.prev`, and re-execs; then it prints the version and
-exits. Running services keep the old binary until restarted. `--update-url
-<manifest>` points it at a mirror. `--auto-update` exists but is off by
-default, and is only sensible for the `-rc` agent until the server hands its
-terminals across a restart.
+exits. A server that updates this way keeps every open terminal: it hands
+its listening socket and the live PTYs to the new version, which picks
+them up on the same PID. Other running copies keep the old binary until
+they restart. `--update-url <manifest>` points it at a mirror.
+
+**Under amarit.** `amarit run termulaa` and `amarit run termulaa -rc` keep
+both running and turn auto-update on; termulaa then checks every five
+minutes (`"interval": "5m"` in `amarit.json`; `AMARIT_UPDATE_INTERVAL=1h`
+in the unit's environment or `--update-interval` change it). Anywhere
+else, `--auto-update` does the same loop and is off by default.
 
 ### Manual
 

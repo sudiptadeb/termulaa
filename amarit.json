@@ -1,6 +1,7 @@
 {
   "project": "termulaa",
   "releases": "https://github.com/sudiptadeb/termulaa/releases/latest/download/releases.json",
+  "interval": "5m",
   "release": {
     "targets": [
       "darwin/arm64",
