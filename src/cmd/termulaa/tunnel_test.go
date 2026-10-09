@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -357,5 +358,56 @@ func TestTunnelE2ESplice(t *testing.T) {
 	case <-tunnelDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serveTunnel did not exit after context cancel")
+	}
+}
+
+func TestSaveOnlyPersistsWithoutDialing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	insecure := true
+	if err := saveRCState(rcState{Server: "https://old.example.com", Token: "old", Label: "old-label", Insecure: insecure}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runTunnelAgent(TunnelConfig{
+			Server:   "https://memd.example.com",
+			Token:    "  new-token\n",
+			SaveOnly: true,
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("save-only run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("save-only run did not return; it must not dial")
+	}
+
+	got := loadRCState()
+	want := rcState{Server: "https://memd.example.com", Token: "new-token", Label: "old-label", Insecure: true}
+	if got != want {
+		t.Fatalf("saved state = %+v, want %+v", got, want)
+	}
+	info, err := os.Stat(rcStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0600 {
+		t.Fatalf("rc.json mode = %o, want 600", mode)
+	}
+}
+
+func TestSaveOnlyRejectsBadServer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	err := runTunnelAgent(TunnelConfig{Server: "ftp://memd.example.com", Token: "tok", SaveOnly: true})
+	if err == nil {
+		t.Fatal("want an error for a non-http rendezvous url")
+	}
+	if _, statErr := os.Stat(rcStatePath()); !os.IsNotExist(statErr) {
+		t.Fatalf("rc.json must not be written for a rejected url, stat err = %v", statErr)
 	}
 }

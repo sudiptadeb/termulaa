@@ -69,6 +69,7 @@ type TunnelConfig struct {
 	Tunnels  int    // pool size: number of concurrent smux tunnels
 	Takeover bool   // disconnect another live agent holding this token
 	Insecure *bool  // skip TLS verification (dev only); nil = use saved value
+	SaveOnly bool   // persist the settings and return without dialing
 }
 
 // rcState is persisted to ~/.termulaa/rc.json.
@@ -130,7 +131,9 @@ func rcDialer(insecure bool) *websocket.Dialer {
 }
 
 // runTunnelAgent is the entry point for `termulaa -rc`. It blocks until the
-// process is signalled or the token is rejected.
+// process is signalled or the token is rejected; with SaveOnly it returns as
+// soon as the settings are on disk, so a service can be paired without a
+// foreground run.
 func runTunnelAgent(cfg TunnelConfig) error {
 	st := loadRCState()
 	if cfg.Server != "" {
@@ -187,7 +190,14 @@ func runTunnelAgent(cfg TunnelConfig) error {
 		st.Token = tok
 	}
 	if err := saveRCState(st); err != nil {
+		if cfg.SaveOnly {
+			return fmt.Errorf("could not save %s: %w", rcStatePath(), err)
+		}
 		log.Printf("rc: warning: could not save state: %v", err)
+	}
+	if cfg.SaveOnly {
+		log.Printf("rc: saved pairing for %q with %s to %s", cfg.Label, st.Server, rcStatePath())
+		return nil
 	}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

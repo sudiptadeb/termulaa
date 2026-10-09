@@ -137,6 +137,7 @@ func main() {
 	rcTunnels := flag.Int("rc-tunnels", 0, "pooled tunnel connections for -rc, 1-8 (default 4)")
 	rcTakeover := flag.Bool("rc-takeover", false, "for -rc: disconnect another agent currently connected with this token (default: refuse and exit)")
 	rcInsecure := flag.Bool("rc-insecure", false, "skip TLS verification for -rc dials (dev only; persisted to ~/.termulaa/rc.json)")
+	rcSave := flag.Bool("rc-save", false, "save the -rc-server, -rc-token and -rc-label settings to ~/.termulaa/rc.json and exit without connecting (implies -rc)")
 	versionFlag := flag.Bool("version", false, "print the termulaa version and exit")
 	flag.Parse()
 
@@ -150,7 +151,7 @@ func main() {
 	// Remote-control agent mode. This is a separate, dumb byte pump — it does
 	// NOT start the terminal server and does NOT relax the loopback bind. See
 	// tunnel.go and SECURITY.md.
-	if *rcFlag {
+	if *rcFlag || *rcSave {
 		var insecure *bool
 		flag.Visit(func(f *flag.Flag) {
 			if f.Name == "rc-insecure" {
@@ -165,6 +166,7 @@ func main() {
 			Tunnels:  *rcTunnels,
 			Takeover: *rcTakeover,
 			Insecure: insecure,
+			SaveOnly: *rcSave,
 		}); err != nil {
 			log.Fatalf("rc: %v", err)
 		}
