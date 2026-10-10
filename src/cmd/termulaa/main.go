@@ -229,7 +229,7 @@ func main() {
 		}
 		ptys = append(ptys, f)
 	}
-	mgr.Adopt(ptys)
+	adopted := mgr.Adopt(ptys)
 	mgr.Start(context.Background())
 	handoffMgr = mgr
 
@@ -253,7 +253,7 @@ func main() {
 			log.Fatalf("Server error: %v", err)
 		}
 	} else {
-		log.Printf("termulaa %s resuming on http://%s (listener and sessions carried across the restart)", Version, addr)
+		log.Printf("termulaa %s resuming on http://%s: listener inherited, %d of %d live terminals adopted", Version, addr, adopted, len(ptys))
 	}
 	handoffListener = ln
 	log.Printf("termulaa %s starting on http://%s", Version, addr)

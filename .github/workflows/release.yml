@@ -102,8 +102,6 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "release/termulaa.apk"
 
       # amarit: the manifest that lets installed binaries find this release.
-      # upkeep.json is the old name, published once more so 0.5.2 binaries can
-      # still find their way to this release; drop it after 0.5.3.
       - name: Write release manifest
         if: steps.rel.outputs.release == 'true'
         env:
@@ -112,9 +110,6 @@ jobs:
           (cd src && go run github.com/sudiptadeb/amarit/cmd/amarit release \
             -config ../amarit.json -version "$TAG" -dist ../release -out ../release/releases.json)
           cat release/releases.json
-          jq '{spec, project, published, channels: (.channels | with_entries(.value = {version: .value})),
-               assets: (.releases | with_entries(.value = .value.assets))}' \
-            release/releases.json > release/upkeep.json
           ls -la release/
 
       - name: Create release and upload binaries
