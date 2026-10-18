@@ -10,4 +10,4 @@ require (
 	github.com/xtaci/smux v1.5.34
 )
 
-require github.com/sudiptadeb/amarit v0.3.1
+require github.com/sudiptadeb/amarit v0.5.3
