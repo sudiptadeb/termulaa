@@ -504,6 +504,9 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 	s.wait = func() int {
 		if err := cmd.Wait(); err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
+				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+					return exitStatus(ws)
+				}
 				return exitErr.ExitCode()
 			}
 			return 1
@@ -513,6 +516,16 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 
 	go s.readPump()
 	return s, nil
+}
+
+// exitStatus follows the shell convention: a process killed by a signal
+// reports 128 plus the signal number, so a client sees 130 for an interrupt
+// and 137 for a SIGKILL instead of -1.
+func exitStatus(ws syscall.WaitStatus) int {
+	if ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return ws.ExitStatus()
 }
 
 // AdoptSession takes over a shell that an earlier incarnation of this
@@ -547,10 +560,7 @@ func AdoptSession(meta SessionMeta, ptmx *os.File, pid int, scrollback *RingBuff
 			}
 			break
 		}
-		if ws.Exited() {
-			return ws.ExitStatus()
-		}
-		return 1
+		return exitStatus(ws)
 	}
 	go s.readPump()
 	return s
