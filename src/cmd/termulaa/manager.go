@@ -548,7 +548,7 @@ func (m *SessionManager) ReviveSession(id string) (*Session, error) {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("session %s not found", id)
 	}
-	if old.Alive {
+	if old.IsAlive() {
 		m.mu.Unlock()
 		return old, nil // Already alive, nothing to do.
 	}
