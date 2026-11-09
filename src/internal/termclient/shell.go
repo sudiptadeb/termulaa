@@ -105,10 +105,7 @@ func Shell(ctx context.Context, creds Credentials, opts ShellOptions) (ExecResul
 		cur.Unlock()
 		conn.Close()
 		if done {
-			if err := tab.Delete(context.Background()); err != nil {
-				return ExecResult{Code: code, TabID: tab.ID}, fmt.Errorf("shell exited (%d) but its tab could not be removed: %w", code, err)
-			}
-			return ExecResult{Code: code}, nil
+			return ExecResult{Code: code, TabID: removeTab(tab, opts.Status)}, nil
 		}
 		if ctx.Err() != nil {
 			return ExecResult{TabID: tab.ID}, ctx.Err()

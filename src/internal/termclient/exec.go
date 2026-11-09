@@ -38,8 +38,9 @@ type ExecOptions struct {
 type ExecResult struct {
 	// Code is the command's exit status (128+signal for a signal death).
 	Code int
-	// TabID names the tab left on the machine when the run could not be
-	// finished from here; empty when the tab was removed.
+	// TabID names the tab left on the machine: because the run could not
+	// be finished from here, or because the tab could not be removed after
+	// it was. Empty when nothing was left behind.
 	TabID string
 }
 
@@ -85,10 +86,7 @@ func Exec(ctx context.Context, creds Credentials, opts ExecOptions) (ExecResult,
 		code, done, err := pump(ctx, conn, opts, &offset)
 		conn.Close()
 		if done {
-			if err := tab.Delete(context.Background()); err != nil {
-				return ExecResult{Code: code, TabID: tab.ID}, fmt.Errorf("command finished (exit %d) but its tab could not be removed: %w", code, err)
-			}
-			return ExecResult{Code: code}, nil
+			return ExecResult{Code: code, TabID: removeTab(tab, opts.Status)}, nil
 		}
 		if ctx.Err() != nil {
 			return abort(tab, opts.Status), ctx.Err()
@@ -133,13 +131,31 @@ func pump(ctx context.Context, conn *Conn, opts ExecOptions, offset *int64) (cod
 
 // abort removes the tab, killing the command, on a cancelled run.
 func abort(tab *Tab, status io.Writer) ExecResult {
-	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
-	defer cancel()
-	if err := tab.Delete(ctx); err != nil {
-		notice(status, "could not stop the command: %v; tab %s is still on the machine", err, tab.ID)
-		return ExecResult{TabID: tab.ID}
+	return ExecResult{TabID: removeTab(tab, status)}
+}
+
+// removeTabFor bounds the retries of a tab removal: the exit code is already
+// in hand, so this is housekeeping that must not hold the caller long, but
+// a machine mid-restart deserves a moment.
+const removeTabFor = 30 * time.Second
+
+// removeTab deletes the tab, retrying briefly. It returns the tab id when
+// the tab is still there, after telling the user.
+func removeTab(tab *Tab, status io.Writer) string {
+	deadline := time.Now().Add(removeTabFor)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+		err := tab.Delete(ctx)
+		cancel()
+		if err == nil {
+			return ""
+		}
+		if time.Now().After(deadline) || !isTransient(err) {
+			notice(status, "tab %s could not be removed (%v); it is still listed on the machine", tab.ID, err)
+			return tab.ID
+		}
+		time.Sleep(2 * time.Second)
 	}
-	return ExecResult{}
 }
 
 // reconnect calls attach until it succeeds or the budget runs out. Every
