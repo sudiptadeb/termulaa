@@ -13,10 +13,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh \
 #     | bash -s -- --service --rc-server https://memd.example.com --rc-token <token>
 #
-# Services keep themselves current: they run with --auto-update. Re-running
-# upgrades in place: the binary is replaced and anything the service manager
-# runs (termulaa / termulaa-rc) is restarted onto the new binary. Processes
-# started by hand are detected and reported, never killed.
+# Services keep themselves current: they run with --auto-update, or under
+# amarit where amarit is installed system-wide. Re-running upgrades in place:
+# the binary is replaced and anything the service manager runs (termulaa /
+# termulaa-rc) is restarted onto the new binary. Processes started by hand
+# are detected and reported, never killed.
 #
 # Environment overrides:
 #   INSTALL_DIR   target directory (default: ~/.local/bin)
@@ -53,7 +54,12 @@ Options:
                 Either way both processes run with --auto-update and keep
                 themselves on the latest release (checked every five
                 minutes; the server hands its terminals over, so none
-                close).
+                close). Where amarit is installed system-wide
+                (`sudo amarit install --system`), both are registered as
+                amarit units `termulaa` and `termulaa-rc` instead, and
+                amarit keeps them current. Services from an earlier
+                install are removed on that switch, which closes the
+                terminals they held, once.
   --no-service  Install the binary only (default).
   --rc-token TOKEN
                 Pair with a rendezvous: save the tunnel token (and
@@ -273,7 +279,8 @@ fresh_pids=" "        # processes this run started detached: current by definiti
 LOG_DIR="$HOME/.termulaa/logs"
 RC_PIDFILE="$HOME/.termulaa/rc.pid"
 
-# Every process the installer sets up keeps itself current with this flag.
+# Every process the installer sets up keeps itself current with this flag
+# (amarit units get the same behaviour from amarit without it).
 AUTO_UPDATE="--auto-update"
 
 # Whether a per-user service manager can serve this account right now.
@@ -403,6 +410,8 @@ restart_services_darwin() {
 
 managed_pids() {
     local unit label pid dom
+    amarit_unit_pid termulaa
+    amarit_unit_pid termulaa-rc
     if [ "$os" = "linux" ]; then
         systemd_user_ok || return 0
         for unit in termulaa.service termulaa-rc.service; do
@@ -519,6 +528,175 @@ flag_pending_note() {
     echo "   Its service file now carries $AUTO_UPDATE, which takes effect when it next"
     echo "   starts (at login or boot, or on the next upgrade); until then it updates"
     echo "   when you re-run this command."
+}
+
+# ── amarit ─────────────────────────────────────────────────────────────────
+# termulaa is handed to amarit only when amarit is installed system-wide, as
+# `amarit install --system` lays it down (amarit's cmd/amarit/service.go,
+# installSystem): on macOS /Library/LaunchDaemons/com.amarit.daemon.plist
+# loaded in the system domain, on Linux /etc/systemd/system/amarit-<user>
+# .service enabled. In both cases the daemon runs as the user and keeps its
+# units in ~/.amarit (or $AMARIT_HOME), talking through files only, so
+# `amarit ls` is the daemon's liveness check. A per-user `amarit install`,
+# or no amarit at all, takes the service-manager path with --auto-update.
+amarit_system_installed() {
+    command -v amarit >/dev/null 2>&1 || return 1
+    if [ "$os" = "darwin" ]; then
+        [ -f /Library/LaunchDaemons/com.amarit.daemon.plist ] \
+            && launchctl print system/com.amarit.daemon >/dev/null 2>&1
+    else
+        command -v systemctl >/dev/null 2>&1 \
+            && systemctl is-active --quiet "amarit-$(id -un)" 2>/dev/null
+    fi
+}
+
+amarit_daemon_ok() {
+    amarit ls 2>/dev/null | head -1 | grep -q '^daemon[[:space:]]*pid [0-9]'
+}
+
+amarit_unit_state() {
+    command -v amarit >/dev/null 2>&1 || return 0
+    amarit ls 2>/dev/null | awk -v u="$1" '$1 == u { print $2; exit }'
+}
+
+amarit_unit_pid() {
+    command -v amarit >/dev/null 2>&1 || return 0
+    amarit ls 2>/dev/null | awk -v u="$1" '$1 == u && $2 == "running" { print $3; exit }'
+}
+
+# amarit refuses a program that a launchd or systemd job file already runs
+# (its guard reads the job files), and two supervisors would fight over one
+# program anyway, so what an earlier install set up is taken down before the
+# units are registered. This is the one switch that closes open terminals:
+# the server has to move from the service manager to amarit as its parent.
+remove_legacy_services() {
+    local removed=0 uid label unit old
+    if [ "$os" = "darwin" ]; then
+        uid=$(id -u)
+        for label in com.termulaa.server com.termulaa.rc; do
+            if [ -f "$HOME/Library/LaunchAgents/$label.plist" ] \
+               || launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+                launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+                rm -f "$HOME/Library/LaunchAgents/$label.plist"
+                echo "✓ Removed LaunchAgent $label"
+                removed=1
+            fi
+        done
+    else
+        for unit in termulaa.service termulaa-rc.service; do
+            if [ -f "$HOME/.config/systemd/user/$unit" ]; then
+                if systemd_user_ok; then
+                    systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+                fi
+                rm -f "$HOME/.config/systemd/user/$unit"
+                echo "✓ Removed systemd user unit $unit"
+                removed=1
+            fi
+        done
+        if [ "$removed" = 1 ] && systemd_user_ok; then
+            systemctl --user daemon-reload 2>/dev/null || true
+        fi
+    fi
+    old=$(cat "$RC_PIDFILE" 2>/dev/null || true)
+    if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
+        kill "$old" 2>/dev/null || true
+        rm -f "$RC_PIDFILE"
+        echo "✓ Stopped the detached tunnel agent (PID $old)"
+        removed=1
+    fi
+    if [ "$removed" = 1 ]; then
+        echo "   termulaa moves from the service manager to amarit; the terminals those"
+        echo "   services held are closed. This happens once."
+    fi
+}
+
+# amarit runs the program as its own child, so a unit that is already
+# running is left exactly as it is: amarit keeps it on the latest release
+# itself (the unit's own --auto-update, turned on by the daemon), and a
+# restart here would only close terminals.
+install_service_amarit() {
+    local out pid
+    remove_legacy_services
+
+    if [ "$(amarit_unit_state termulaa)" = "running" ]; then
+        pid=$(amarit_unit_pid termulaa)
+        if [ "$updated" = 1 ]; then
+            echo "✓ amarit unit termulaa running (PID $pid) — left alone so its terminals stay"
+            echo "   open; amarit moves it to $tag in place within minutes"
+        else
+            echo "✓ amarit unit termulaa already running (PID $pid) — left alone"
+        fi
+    elif out=$(amarit run -name termulaa "$dest" 2>&1); then
+        echo "✓ amarit unit termulaa registered and running (amarit keeps it current)"
+    else
+        echo "✗ amarit unit termulaa did not start:" >&2
+        printf '%s\n' "$out" | sed 's/^/    /' >&2
+        pid=$(termulaa_pids server | head -1)
+        if [ -n "$pid" ]; then
+            echo "  A terminal server started by hand (PID $pid) holds the port; amarit keeps" >&2
+            echo "  retrying and takes over as soon as that one stops." >&2
+        fi
+        restart_failed="$restart_failed termulaa"
+    fi
+
+    if ! rc_paired; then
+        echo "✓ amarit unit termulaa-rc not registered — no token yet"
+        print_pair_steps
+        return 0
+    fi
+    if [ "$(amarit_unit_state termulaa-rc)" = "running" ]; then
+        if [ "$paired_now" = 1 ]; then
+            if amarit restart termulaa-rc >/dev/null 2>&1; then
+                echo "✓ amarit unit termulaa-rc restarted with the new pairing"
+            else
+                echo "✗ amarit unit termulaa-rc could not be restarted (amarit restart termulaa-rc)" >&2
+                restart_failed="$restart_failed termulaa-rc"
+            fi
+        else
+            echo "✓ amarit unit termulaa-rc already running (PID $(amarit_unit_pid termulaa-rc)) — left alone"
+        fi
+    elif out=$(amarit run -name termulaa-rc "$dest" -rc 2>&1); then
+        echo "✓ amarit unit termulaa-rc registered and running (token found in ~/.termulaa/rc.json)"
+    else
+        echo "✗ amarit unit termulaa-rc did not start:" >&2
+        printf '%s\n' "$out" | sed 's/^/    /' >&2
+        restart_failed="$restart_failed termulaa-rc"
+    fi
+}
+
+# Whether amarit already has termulaa units (its daemon may be down; the
+# units' processes keep running without it).
+amarit_has_units() {
+    local base
+    base="${AMARIT_HOME:-$HOME/.amarit}"
+    [ -f "$base/units/termulaa.json" ] || [ -f "$base/units/termulaa-rc.json" ]
+}
+
+amarit_start_hint() {
+    if [ "$os" = "darwin" ]; then
+        echo "sudo launchctl kickstart -k system/com.amarit.daemon"
+    else
+        echo "sudo systemctl start amarit-$(id -un)"
+    fi
+}
+
+# A system amarit whose daemon is down: when it already owns termulaa, a
+# second supervisor would collide with its units now (they keep running
+# without the daemon) and again the moment it comes back, so the installer
+# stops here. When it owns nothing yet, a plain service does no harm and
+# the next run hands over once the daemon is up.
+amarit_daemon_down() {
+    echo "⚠️  amarit is installed system-wide but its daemon is not running."
+    if amarit_has_units; then
+        echo "   Its termulaa units are still registered, so nothing else is set up here:" >&2
+        echo "   two supervisors for one program would fight. Start the daemon:" >&2
+        echo "     $(amarit_start_hint)" >&2
+        echo "   then re-run this installer." >&2
+        exit 1
+    fi
+    echo "   termulaa is set up as a plain service with $AUTO_UPDATE instead. To hand it"
+    echo "   to amarit later, start the daemon ($(amarit_start_hint)) and re-run this installer."
+    echo
 }
 
 install_service_linux() {
@@ -848,14 +1026,21 @@ start_detached() {
 
 if [ "$SERVICE" = 1 ]; then
     echo
-    if service_manager_ok; then
-        case "$os" in
-            linux)  install_service_linux ;;
-            darwin) install_service_darwin ;;
-        esac
+    if amarit_system_installed && amarit_daemon_ok; then
+        install_service_amarit
     else
-        explain_no_service_manager
-        start_detached
+        if amarit_system_installed; then
+            amarit_daemon_down
+        fi
+        if service_manager_ok; then
+            case "$os" in
+                linux)  install_service_linux ;;
+                darwin) install_service_darwin ;;
+            esac
+        else
+            explain_no_service_manager
+            start_detached
+        fi
     fi
     warn_unmanaged
     report_failures_and_exit
