@@ -64,8 +64,11 @@ pid_of() {
 count_termulaa() { pgrep -u "$(id -u)" -f "^$dest( |\$)" 2>/dev/null | wc -l | tr -d ' '; }
 
 # The server's port: ~/.termulaa/config.json may move it off 17380.
-port=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$HOME/.termulaa/config.json" 2>/dev/null | head -1)
-port=${port:-17380}
+port=17380
+if [ -f "$HOME/.termulaa/config.json" ]; then
+    port=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$HOME/.termulaa/config.json" | head -1)
+    port=${port:-17380}
+fi
 
 has_flag() { ps -p "$1" -o args= 2>/dev/null | grep -q -- '--auto-update'; }
 
