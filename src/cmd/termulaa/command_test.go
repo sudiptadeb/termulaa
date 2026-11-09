@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -178,7 +179,7 @@ func TestRawAttachResumesFromOffset(t *testing.T) {
 
 	first := attachSession(t, srv, tabID, sessionID, token, "&from=0")
 	var got []byte
-	for !bytes.Contains(got, []byte("first\r\n")) {
+	for !bytes.Contains(got, []byte("first\n")) {
 		kind, msg, err := first.ReadMessage()
 		if err != nil {
 			t.Fatalf("first attach: %v", err)
@@ -201,7 +202,7 @@ func TestRawAttachResumesFromOffset(t *testing.T) {
 	if ctl["type"] != "exit" || ctl["code"].(float64) != 0 {
 		t.Fatalf("control after output = %v, want exit 0", ctl)
 	}
-	if !bytes.HasSuffix(rest, []byte("second\r\n")) || bytes.Contains(rest, []byte("first")) {
+	if !bytes.HasSuffix(rest, []byte("second\n")) || bytes.Contains(rest, []byte("first")) {
 		t.Fatalf("resumed output = %q, want only what followed the first attach", rest)
 	}
 
@@ -236,5 +237,72 @@ func TestRawAttachReportsOverwrittenBytes(t *testing.T) {
 	offset, output, ctl := readRaw(t, ws)
 	if offset != 8 || string(output) != "89ABCDEF" || ctl["type"] != "exit" {
 		t.Fatalf("offset=%d output=%q ctl=%v, want the 8 bytes still held from offset 8", offset, output, ctl)
+	}
+}
+
+func TestCommandOutputIsExactBytesAndPictureIsNotStairStepped(t *testing.T) {
+	srv := httptest.NewServer(newTestMux(t))
+	defer srv.Close()
+
+	tabID, sessionID := commandTab(t, srv, "printf 'a\\nb\\n'; read x; printf 'c\\nd\\n'")
+	tabWS, token := ownTab(t, srv, tabID)
+	defer tabWS.Close()
+
+	// The stream face: the command's bytes, no \r added by the PTY.
+	raw := attachSession(t, srv, tabID, sessionID, token, "&from=0")
+	var got []byte
+	for !bytes.Contains(got, []byte("b\n")) {
+		kind, msg, err := raw.ReadMessage()
+		if err != nil {
+			t.Fatalf("raw attach: %v", err)
+		}
+		if kind == websocket.BinaryMessage {
+			got = append(got, msg...)
+		}
+	}
+	raw.Close()
+	if string(got) != "a\nb\n" {
+		t.Fatalf("stream = %q, want the command's exact bytes a\\nb\\n", got)
+	}
+
+	// The picture face: the snapshot has b under a, and live output arrives
+	// with the \r a terminal needs.
+	pic := attachSession(t, srv, tabID, sessionID, token, "")
+	defer pic.Close()
+	var snapshot, live []byte
+	for {
+		kind, msg, err := pic.ReadMessage()
+		if err != nil {
+			t.Fatalf("picture attach: %v", err)
+		}
+		if kind == websocket.BinaryMessage {
+			live = append(live, msg...)
+			continue
+		}
+		var ctl struct {
+			Type string `json:"type"`
+			Data string `json:"data"`
+		}
+		json.Unmarshal(msg, &ctl)
+		if ctl.Type == "scrollback" {
+			snapshot, _ = base64.StdEncoding.DecodeString(ctl.Data)
+			break
+		}
+	}
+	if !bytes.Contains(snapshot, []byte("a\r\nb")) {
+		t.Fatalf("snapshot = %q, want b rendered at the start of the line under a", snapshot)
+	}
+	pic.WriteMessage(websocket.BinaryMessage, []byte("\n"))
+	for !bytes.Contains(live, []byte("d\r\n")) {
+		kind, msg, err := pic.ReadMessage()
+		if err != nil {
+			t.Fatalf("picture live: %v", err)
+		}
+		if kind == websocket.BinaryMessage {
+			live = append(live, msg...)
+		}
+	}
+	if !bytes.Contains(live, []byte("c\r\nd\r\n")) {
+		t.Fatalf("live picture bytes = %q, want c\\r\\nd\\r\\n", live)
 	}
 }

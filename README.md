@@ -213,9 +213,10 @@ termulaa exec laptop -- 'cd ~/src/app && make test' # run a command, exit with i
 `shell` is a real terminal: raw keyboard, resizes follow your window,
 vim and top work, and your local terminal is restored on every way out.
 `exec` is for scripts and agents: the command runs under the machine's
-login shell in a PTY, its output streams to stdout (stdout and stderr
-merged, as a terminal shows them), and the exit code is the command's
-own; 255 means termulaa itself failed, 130 that you interrupted it.
+login shell in a PTY, its output streams to stdout byte for byte
+(stdout and stderr merged in the order written; `\n` stays `\n`, binary
+output is intact), and the exit code is the command's own; 255 means
+termulaa itself failed, 130 that you interrupted it.
 
 Both run in a tab on the machine, so a dropped connection, a rendezvous
 redeploy or a network change does not touch the work: the client

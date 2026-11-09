@@ -85,7 +85,7 @@ func TestClientExecStreamsOutputAndExitCode(t *testing.T) {
 	if res.Code != 7 || res.TabID != "" {
 		t.Fatalf("result = %+v, want exit 7 and no tab left", res)
 	}
-	if got := out.String(); !strings.Contains(got, "hello\r\n") || !strings.Contains(got, "oops\r\n") {
+	if got := out.String(); !strings.Contains(got, "hello\n") || !strings.Contains(got, "oops\n") {
 		t.Fatalf("output = %q, want both streams as the PTY shows them", got)
 	}
 

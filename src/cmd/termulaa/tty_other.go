@@ -6,9 +6,13 @@ import (
 	"errors"
 	"os"
 	"syscall"
+
+	"github.com/creack/pty"
 )
 
 type ttyState struct{}
+
+func openPTY(bool) (*os.File, *os.File, error) { return pty.Open() }
 
 func isTerminal(*os.File) bool { return false }
 

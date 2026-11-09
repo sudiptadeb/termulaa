@@ -77,9 +77,11 @@ How the command runs:
   the remote shell as you would for ssh: wrap the whole command in single
   quotes locally and it arrives intact, pipes, globs, $VARS and all.
   It runs in a pseudo-terminal (PTY): stdout and stderr arrive merged,
-  in order, as a terminal would show them, and lines end in \r\n. There
-  is no stdin from here: a command that reads stdin waits for input it
-  will never get, so give it </dev/null or a here-string.
+  in the order they were written. The bytes are exactly the command's
+  own (the PTY does no output translation: \n stays \n, binary output
+  is byte-clean). There is no stdin from here: a command that reads
+  stdin waits for input it will never get, so give it </dev/null or a
+  here-string.
   The command's own stdout is this process's stdout; termulaa's notices
   go to stderr prefixed "termulaa:".
 
@@ -150,8 +152,9 @@ const helpAgents = `Driving termulaa from an automation agent (no TTY assumed)
 
 3. Run a command and read its result:
      termulaa exec <machine> -- '<command>'
-   stdout is the command's merged stdout+stderr (PTY, lines end \r\n);
-   the exit code is the command's. Quote the whole command in single
+   stdout is the command's merged stdout+stderr, byte for byte (a PTY
+   merges them; it does not alter the bytes); the exit code is the
+   command's. Quote the whole command in single
    quotes; it runs under the machine's login shell. Commands that read
    stdin must get it from the command line (</dev/null, here-strings).
    Long builds are fine: a dropped connection is resumed for up to 15

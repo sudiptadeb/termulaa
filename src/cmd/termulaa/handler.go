@@ -533,6 +533,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v)", sessionID, r.RemoteAddr, revived)
 
 	client := newWSClient(conn, tabID, token)
+	client.raw = from >= 0
 	go client.writePump(sess)
 
 	defer func() {

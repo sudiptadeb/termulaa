@@ -120,6 +120,19 @@ exit code (§5), not a second run. The string is handed to the shell
 unmodified; the client is responsible for quoting. It may be large
 (tens of kilobytes are fine); the limit is the machine's argument size.
 
+A command session's PTY has output post-processing turned off (termios
+`OPOST`, hence `ONLCR`) before the command starts, so the stream face
+(§4.4) carries the command's exact bytes: `\n` stays `\n` and binary
+output is byte-clean. The picture face (§4.3) is rendered as a terminal
+with `ONLCR` would render it, so the browser view does not stair-step.
+Interactive sessions keep the PTY's default line discipline.
+
+A server that predates `command` ignores the field and creates an
+interactive shell. The response echoes `"command"` when it was
+honoured; a client that asked for one and does not get it back MUST
+delete the tab and report that the machine's termulaa needs updating,
+rather than wait on a shell that will never exit.
+
 ### 3.2 Own
 
 ```
@@ -289,11 +302,10 @@ A client that runs one command and wants its exit code:
 
 What a command runner must document to its users, because the PTY
 decides it and not the client: stdout and stderr arrive merged in the
-order the terminal would show them; `\n` arrives as `\r\n` unless the
-command turns output post-processing off (`stty -opost`); a command
-that reads stdin blocks, since nothing is typed. Output that scrolled
-out of the machine's ring while the client was disconnected is lost and
-reported through the replay offset.
+order they were written, otherwise byte for byte as the command wrote
+them; a command that reads stdin blocks, since nothing is typed. Output
+that scrolled out of the machine's ring while the client was
+disconnected is lost and reported through the replay offset.
 
 ## 6. The interactive client, normatively
 
@@ -324,7 +336,7 @@ reported through the replay offset.
   afterwards gets them. Output produced in the last moments before a
   crash that did not save state is lost.
 - The server makes no attempt to keep a command's stdout and stderr
-  apart, to deliver its stdin, or to hide the PTY's line discipline.
+  apart or to deliver its stdin.
 
 ## 8. Versioning
 
@@ -332,6 +344,7 @@ This is version 1, the protocol the web UI in `src/cmd/termulaa/ui`
 speaks plus the `command` field on tab creation and the `from`
 parameter on session attach, both of which a server predating them
 ignores (the tab becomes an interactive shell; the attach replays the
-picture). A client MAY detect an old server by the absence of a `replay`
-frame after asking for `from`. Incompatible changes to framing or
-authorisation MUST use new paths.
+picture). A client detects an old server by the missing `command` echo
+in the tab response (§3.1) and by the absence of a `replay` frame after
+asking for `from`. Incompatible changes to framing or authorisation
+MUST use new paths.

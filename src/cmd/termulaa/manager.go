@@ -186,7 +186,8 @@ func (m *SessionManager) LoadState() {
 		}
 		_, saved := s.scrollback.Dump()
 		s.savedOutput.Store(saved)
-		s.term = restoreTerminal(meta.Cols, meta.Rows, s.scrollback)
+		s.rawOutput = meta.Command != ""
+		s.term = restoreTerminal(meta.Cols, meta.Rows, s.scrollback, s.rawOutput)
 
 		m.sessions[id] = s
 		loaded++

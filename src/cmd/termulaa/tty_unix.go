@@ -48,6 +48,29 @@ func (s *ttyState) restore() {
 	ioctlTermios(s.fd, ioctlSetTermios, &s.termios)
 }
 
+// openPTY opens a pseudo-terminal pair. With rawOutput the slave's output
+// post-processing (OPOST, and so ONLCR) is turned off before any process
+// is attached, so what is written to it is what the master reads.
+func openPTY(rawOutput bool) (ptmx, tty *os.File, err error) {
+	ptmx, tty, err = pty.Open()
+	if err != nil {
+		return nil, nil, err
+	}
+	if rawOutput {
+		var t syscall.Termios
+		if err = ioctlTermios(tty.Fd(), ioctlGetTermios, &t); err == nil {
+			t.Oflag &^= syscall.OPOST
+			err = ioctlTermios(tty.Fd(), ioctlSetTermios, &t)
+		}
+		if err != nil {
+			ptmx.Close()
+			tty.Close()
+			return nil, nil, err
+		}
+	}
+	return ptmx, tty, nil
+}
+
 // terminalSize returns the terminal's columns and rows.
 func terminalSize(f *os.File) (cols, rows int, err error) {
 	rows, cols, err = pty.Getsize(f)

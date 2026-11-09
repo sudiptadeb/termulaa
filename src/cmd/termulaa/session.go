@@ -223,6 +223,9 @@ type wsClient struct {
 	done       chan struct{}
 	tabID      string
 	ownerToken string
+	// raw clients attached to the byte stream (?from=) and get the PTY's
+	// bytes verbatim; the others render a picture and get pictureBytes.
+	raw bool
 
 	// Outbound queue. PTY output is never dropped for a slow client: bytes
 	// are coalesced into a bounded backlog that writePump drains, and a
@@ -417,6 +420,11 @@ type Session struct {
 	CreatedAt  time.Time
 	LastActive time.Time
 
+	// rawOutput marks a PTY whose output post-processing is off (command
+	// sessions): the stream is the command's exact bytes, and the picture
+	// face renders \n as a terminal with ONLCR would, see picture.
+	rawOutput bool
+
 	cmd        *exec.Cmd
 	pty        *os.File
 	scrollback *RingBuffer
@@ -527,9 +535,25 @@ func startSession(id string, cmd *exec.Cmd, command, shell, cwd string, cols, ro
 		scrollbackBytes = defaultScrollbackBytes
 	}
 
-	ptmx, err := pty.Start(cmd)
+	// A command session's PTY does no output post-processing, so the bytes
+	// a client receives are exactly what the command wrote (no \n to \r\n);
+	// set before the command starts so nothing can race it.
+	rawOutput := command != ""
+	ptmx, tty, err := openPTY(rawOutput)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start pty: %w", err)
+		return nil, fmt.Errorf("failed to open pty: %w", err)
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	err = cmd.Start()
+	tty.Close()
+	if err != nil {
+		ptmx.Close()
+		return nil, fmt.Errorf("failed to start %s: %w", shell, err)
 	}
 
 	// Set initial window size.
@@ -555,6 +579,7 @@ func startSession(id string, cmd *exec.Cmd, command, shell, cwd string, cols, ro
 		CreatedAt:  time.Now(),
 		LastActive: time.Now(),
 
+		rawOutput:  rawOutput,
 		cmd:        cmd,
 		pty:        ptmx,
 		pid:        cmd.Process.Pid,
@@ -606,6 +631,7 @@ func AdoptSession(meta SessionMeta, ptmx *os.File, pid int, scrollback *RingBuff
 		CreatedAt:  meta.CreatedAt,
 		LastActive: time.Now(),
 
+		rawOutput:  meta.Command != "",
 		pty:        ptmx,
 		pid:        pid,
 		scrollback: scrollback,
@@ -643,7 +669,7 @@ func (s *Session) HandoffFile() *os.File {
 // restoreTerminal rebuilds a terminal for a session loaded from disk by
 // replaying its persisted ring buffer, so the picture it last showed is
 // available before the session is revived.
-func restoreTerminal(cols, rows int, ring *RingBuffer) *vterm.Terminal {
+func restoreTerminal(cols, rows int, ring *RingBuffer, rawOutput bool) *vterm.Terminal {
 	if cols <= 0 {
 		cols = 80
 	}
@@ -652,9 +678,25 @@ func restoreTerminal(cols, rows int, ring *RingBuffer) *vterm.Terminal {
 	}
 	term := vterm.New(cols, rows)
 	if data := ring.ReadReplay(); len(data) > 0 {
-		term.Write(data)
+		term.Write(pictureBytes(data, rawOutput))
 	}
 	return term
+}
+
+var (
+	newline = []byte{'\n'}
+	crlf    = []byte{'\r', '\n'}
+)
+
+// pictureBytes is what a terminal rendering a session's output must be fed:
+// the bytes themselves, unless the PTY skipped output post-processing, in
+// which case each \n becomes \r\n as the line discipline would have made
+// it. Without this a command's output stair-steps in the browser.
+func pictureBytes(data []byte, rawOutput bool) []byte {
+	if !rawOutput {
+		return data
+	}
+	return bytes.ReplaceAll(data, newline, crlf)
 }
 
 // readPump continuously reads PTY output, writes to scrollback, and broadcasts
@@ -669,7 +711,7 @@ func (s *Session) readPump() {
 
 			s.outMu.Lock()
 			s.scrollback.Write(data)
-			s.term.Write(data)
+			s.term.Write(pictureBytes(data, s.rawOutput))
 			s.Broadcast(data)
 			s.outMu.Unlock()
 			now := time.Now()
@@ -841,8 +883,16 @@ func (s *Session) Broadcast(data []byte) {
 	copy(snapshot, s.clients)
 	s.mu.Unlock()
 
+	var picture []byte
 	for _, c := range snapshot {
-		c.queueBinary(data)
+		if c.raw {
+			c.queueBinary(data)
+			continue
+		}
+		if picture == nil {
+			picture = pictureBytes(data, s.rawOutput)
+		}
+		c.queueBinary(picture)
 	}
 }
 
