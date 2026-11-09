@@ -70,6 +70,12 @@ pid_of() {
     return 0
 }
 
+# amarit's output is read whole: a reader that stops early (head) can give
+# amarit SIGPIPE, and pipefail would make that the pipeline's verdict.
+amarit_daemon_up() { amarit ls | awk 'NR == 1 && $1 == "daemon" && $2 == "pid" { ok = 1 } END { exit !ok }'; }
+amarit_state() { amarit ls | awk -v u="$1" '!done && $1 == u { print $2; done = 1 }'; }
+amarit_pid() { amarit ls | awk -v u="$1" '!done && $1 == u { print $3; done = 1 }'; }
+
 count_termulaa() { pgrep -u "$(id -u)" -f "^$dest( |\$)" 2>/dev/null | wc -l | tr -d ' '; }
 
 # The server's port: ~/.termulaa/config.json may move it off 17380.
@@ -195,11 +201,11 @@ amarit_ready=0
 if ! command -v amarit >/dev/null 2>&1; then
     echo "SKIP: amarit is not on PATH"
 elif [ -n "${AMARIT_HOME:-}" ]; then
-    amarit ls | head -1 | grep -q 'pid' && amarit_ready=1 || echo "SKIP: no scratch daemon at AMARIT_HOME=$AMARIT_HOME"
+    if amarit_daemon_up; then amarit_ready=1; else echo "SKIP: no scratch daemon at AMARIT_HOME=$AMARIT_HOME"; fi
 elif sudo -n true 2>/dev/null; then
     sudo "$(command -v amarit)" install --system
-    for i in $(seq 20); do amarit ls | head -1 | grep -q 'pid' && break; sleep 0.5; done
-    amarit ls | head -1 | grep -q 'pid' || fail "amarit daemon did not come up after install --system"
+    for i in $(seq 20); do amarit_daemon_up && break; sleep 0.5; done
+    amarit_daemon_up || fail "amarit daemon did not come up after install --system"
     amarit_ready=1
 else
     echo "SKIP: no passwordless sudo to install amarit system-wide"
@@ -212,10 +218,9 @@ if [ "$amarit_ready" = 1 ]; then
     fi
     install --service
     sleep 1
-    amarit ls | head -1
-    [ "$(amarit ls | head -1 | grep -c 'pid')" = 1 ] || fail "amarit daemon gone right after the hand-over"
-    [ "$(amarit ls | awk '$1=="termulaa"{print $2}')" = running ] || fail "amarit unit termulaa not running"
-    [ "$(amarit ls | awk '$1=="termulaa-rc"{print $2}')" = running ] || fail "amarit unit termulaa-rc not running"
+    amarit_daemon_up || fail "amarit daemon gone right after the hand-over"
+    [ "$(amarit_state termulaa)" = running ] || fail "amarit unit termulaa not running"
+    [ "$(amarit_state termulaa-rc)" = running ] || fail "amarit unit termulaa-rc not running"
     grep -q "\"$dest\"" "${AMARIT_HOME:-$HOME/.amarit}/units/termulaa.json" || fail "amarit unit does not run the installed binary"
     case "$path" in
         systemd) [ ! -f "$HOME/.config/systemd/user/termulaa.service" ] || fail "old systemd unit left behind"
@@ -226,11 +231,11 @@ if [ "$amarit_ready" = 1 ]; then
     grep -q 'moves from the service manager to amarit' "$root/.tmp/smoke-last.out" || fail "the output does not say the switch closes terminals"
     wait_for "the terminal server under amarit" server_answers
     [ "$(count_termulaa)" = 2 ] || fail "duplicate processes after the amarit switch: $(count_termulaa)"
-    u5=$(amarit ls | awk '$1=="termulaa"{print $3}'); r5=$(amarit ls | awk '$1=="termulaa-rc"{print $3}')
+    u5=$(amarit_pid termulaa); r5=$(amarit_pid termulaa-rc)
     for n in 1 2; do
         install --service
-        [ "$(amarit ls | awk '$1=="termulaa"{print $3}')" = "$u5" ] || fail "amarit re-run $n restarted the server unit"
-        [ "$(amarit ls | awk '$1=="termulaa-rc"{print $3}')" = "$r5" ] || fail "amarit re-run $n restarted the agent unit"
+        [ "$(amarit_pid termulaa)" = "$u5" ] || fail "amarit re-run $n restarted the server unit"
+        [ "$(amarit_pid termulaa-rc)" = "$r5" ] || fail "amarit re-run $n restarted the agent unit"
         [ "$(grep -c 'left alone' "$root/.tmp/smoke-last.out")" = 2 ] || fail "amarit re-run $n did not report both units left alone"
     done
     echo "amarit: switched once, then left alone (server unit pid $u5, agent unit pid $r5)"

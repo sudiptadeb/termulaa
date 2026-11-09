@@ -550,18 +550,21 @@ amarit_system_installed() {
     fi
 }
 
+# These read amarit's whole output: a reader that stops early (head, an
+# awk exit) can leave amarit with SIGPIPE, which pipefail then reports as
+# the pipeline's failure.
 amarit_daemon_ok() {
-    amarit ls 2>/dev/null | head -1 | grep -q '^daemon[[:space:]]*pid [0-9]'
+    amarit ls 2>/dev/null | awk 'NR == 1 && $1 == "daemon" && $2 == "pid" { ok = 1 } END { exit !ok }'
 }
 
 amarit_unit_state() {
     command -v amarit >/dev/null 2>&1 || return 0
-    amarit ls 2>/dev/null | awk -v u="$1" '$1 == u { print $2; exit }'
+    amarit ls 2>/dev/null | awk -v u="$1" '!done && $1 == u { print $2; done = 1 }'
 }
 
 amarit_unit_pid() {
     command -v amarit >/dev/null 2>&1 || return 0
-    amarit ls 2>/dev/null | awk -v u="$1" '$1 == u && $2 == "running" { print $3; exit }'
+    amarit ls 2>/dev/null | awk -v u="$1" '!done && $1 == u && $2 == "running" { print $3; done = 1 }'
 }
 
 # amarit refuses a program that a launchd or systemd job file already runs
