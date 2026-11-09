@@ -630,7 +630,9 @@ func (s *Session) readPump() {
 			s.Broadcast(data)
 			s.outMu.Unlock()
 			now := time.Now()
+			s.mu.Lock()
 			s.LastActive = now
+			s.mu.Unlock()
 			s.lastOutput.Store(now.UnixNano())
 		}
 		if err != nil {
@@ -777,7 +779,9 @@ func (s *Session) Broadcast(data []byte) {
 func (s *Session) WriteInput(data []byte) {
 	if s.pty != nil {
 		s.pty.Write(data)
+		s.mu.Lock()
 		s.LastActive = time.Now()
+		s.mu.Unlock()
 	}
 }
 
