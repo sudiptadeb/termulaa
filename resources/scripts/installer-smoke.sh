@@ -43,6 +43,15 @@ dest="$INSTALL_DIR/termulaa"
 
 fail() {
     echo "FAIL: $*" >&2
+    # What amarit saw, when it is in play: its view of the units, the
+    # daemon's own log, and the system service that is meant to run it.
+    if command -v amarit >/dev/null 2>&1; then
+        echo "--- amarit ls" >&2; amarit ls >&2 || true
+        echo "--- daemon.log" >&2; tail -n 30 "${AMARIT_HOME:-$HOME/.amarit}/daemon.log" >&2 2>/dev/null || true
+        if [ "$os" = linux ]; then
+            echo "--- systemctl status amarit-$(id -un)" >&2; systemctl status "amarit-$(id -un)" --no-pager >&2 2>&1 || true
+        fi
+    fi
     exit 1
 }
 
@@ -203,6 +212,8 @@ if [ "$amarit_ready" = 1 ]; then
     fi
     install --service
     sleep 1
+    amarit ls | head -1
+    [ "$(amarit ls | head -1 | grep -c 'pid')" = 1 ] || fail "amarit daemon gone right after the hand-over"
     [ "$(amarit ls | awk '$1=="termulaa"{print $2}')" = running ] || fail "amarit unit termulaa not running"
     [ "$(amarit ls | awk '$1=="termulaa-rc"{print $2}')" = running ] || fail "amarit unit termulaa-rc not running"
     grep -q "\"$dest\"" "${AMARIT_HOME:-$HOME/.amarit}/units/termulaa.json" || fail "amarit unit does not run the installed binary"
