@@ -49,7 +49,11 @@ curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh
 
 ### Updating
 
-Nothing updates by itself unless you ask. Two ways to ask:
+Anything `install.sh --service` set up keeps itself current: both
+processes run with `--auto-update` (or under amarit, below) and move to
+each new release within five minutes of it appearing, the server handing
+its terminals over so none close. A `termulaa` you run by hand updates
+only when you ask. Two ways to ask:
 
 **Re-run the install command.** This is the full update. It compares
 `termulaa -version` against the latest release and replaces the binary
@@ -75,8 +79,11 @@ they restart. `--update-url <manifest>` points it at a mirror.
 **Under amarit.** `amarit run termulaa` and `amarit run termulaa -rc` keep
 both running and turn auto-update on; termulaa then checks every five
 minutes (`"interval": "5m"` in `amarit.json`; `AMARIT_UPDATE_INTERVAL=1h`
-in the unit's environment or `--update-interval` change it). Anywhere
-else, `--auto-update` does the same loop and is off by default.
+in the unit's environment or `--update-interval` change it). Where amarit
+is installed system-wide (`sudo amarit install --system`), `install.sh
+--service` registers exactly these two units instead of launchd or
+systemd services. Anywhere else, `--auto-update` does the same loop and
+is off by default; the installer's services run with it.
 
 ### Manual
 
@@ -261,12 +268,29 @@ processes up to start at login/boot and restart on failure — systemd
 curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh | bash -s -- --service
 ```
 
-Re-running it is safe; it rewrites the service files in place and
-restarts the services onto the freshly installed binary (an already
-running unit would otherwise keep executing the old one). The
+Both services run with `--auto-update`, so from then on they move to
+each new release by themselves (see [Updating](#updating)). Re-running
+the installer is safe and changes only what differs: it rewrites the
+service files in place, restarts the tunnel agent when its binary, token
+or service file changed, and leaves a terminal server that is already on
+the installed version running. A server set up by an older installer,
+without `--auto-update`, is not restarted just to add the flag: the flag
+is written to its service file and takes effect when it next starts (at
+login or boot, or on the next upgrade), and the installer says so. The
 templates live in [resources/service/](resources/service/) if you prefer
 to install them by hand (replace the `@TERMULAA_BIN@` / `@HOME@`
 placeholders).
+
+**With amarit installed system-wide** (`sudo amarit install --system`,
+see [amarit](https://github.com/sudiptadeb/amarit)), `--service` hands
+both processes to amarit instead, as the units `termulaa` and
+`termulaa-rc` (`amarit run -name ...`; amarit turns auto-update on). A
+machine that already has them is left exactly as it is. Services an
+earlier install set up through launchd or systemd are removed on that
+first switch, which closes the terminals they held, once. A per-user
+`amarit install`, or an installed amarit whose daemon is not running,
+does not count: the installer uses the service manager then, and says
+why.
 
 **Pair before the tunnel agent can run as a service.** The agent needs a
 token, and under systemd/launchd there is no terminal to prompt on — it

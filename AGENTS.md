@@ -209,9 +209,9 @@ xterm.js the reconnected screen is wrong.
 | `docs/terminal-protocol.md` | Normative tab + session WebSocket spec for non-browser clients |
 | `src/cmd/termulaa/ui/app.js` | Frontend — tabs, panes, xterm.js |
 | `build/build.sh` | Cross-compile to `dist/<os>/` |
-| `install.sh` | Release installer; `--service` sets up user services |
+| `install.sh` | Release installer; `--service` sets up user services with `--auto-update`, or amarit units where amarit is installed system-wide; re-runs are idempotent |
 | `resources/service/` | systemd user unit + launchd plist templates |
-| `resources/scripts/installer-smoke.sh` | CI check of `install.sh`: pair, start, re-run keeps the server |
+| `resources/scripts/installer-smoke.sh` | CI check of `install.sh`: pair, start with `--auto-update`, re-runs change nothing, old-installer machines brought over, amarit hand-over where sudo allows |
 | `resources/scripts/client-e2e.sh` | Pre-release end-to-end test of the terminal client through memd, the agent and the server; `src/cmd/ptyharness` drives `shell` under a PTY for it |
 | `.github/workflows/build.yml` | gofmt, go vet, go test, build, installer smoke test on push/PR |
 | `.github/workflows/release.yml` | Release on tag push, or on `main` when `VERSION` moves |
