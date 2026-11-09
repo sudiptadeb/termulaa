@@ -41,6 +41,13 @@ jobs:
       - name: go build
         run: bash build/build.sh
 
+      # amarit installed system-wide, so the smoke test also covers the
+      # installer handing termulaa to amarit (it skips that part without it).
+      - name: install amarit
+        run: |
+          go install github.com/sudiptadeb/amarit/cmd/amarit@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: installer smoke test
         run: bash resources/scripts/installer-smoke.sh
 
