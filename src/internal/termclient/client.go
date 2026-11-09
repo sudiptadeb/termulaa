@@ -168,5 +168,6 @@ func (c *Client) wsURL(path string, q url.Values) (string, error) {
 func isTransient(err error) bool {
 	var ae *AuthError
 	var tg *TabGoneError
-	return err != nil && !errors.As(err, &ae) && !errors.As(err, &tg) && !strings.Contains(err.Error(), "view host")
+	var om *OldMachineError
+	return err != nil && !errors.As(err, &ae) && !errors.As(err, &tg) && !errors.As(err, &om) && !strings.Contains(err.Error(), "view host")
 }

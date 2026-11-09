@@ -39,6 +39,14 @@ func (e *OfflineError) Error() string {
 	return fmt.Sprintf("%q is not connected; connected: %s", e.Machine, strings.Join(e.Connected, ", "))
 }
 
+// OldMachineError means the machine's termulaa predates command sessions:
+// it cannot run a command and report its exit code. shell still works.
+type OldMachineError struct{ Machine string }
+
+func (e *OldMachineError) Error() string {
+	return fmt.Sprintf("the termulaa on %s is too old to run commands (it ignores them and opens a shell): run `termulaa update` on %s, then retry", e.Machine, e.Machine)
+}
+
 // TabGoneError means the tab the client was using no longer exists on the
 // machine (deleted, or the server lost its state), so there is nothing to
 // resume.

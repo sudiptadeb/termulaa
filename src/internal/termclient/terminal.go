@@ -34,6 +34,7 @@ func (c *Client) CreateTab(ctx context.Context, m Machine, name, command string)
 		Layout struct {
 			SessionID string `json:"session_id"`
 		} `json:"layout"`
+		Command string `json:"command"`
 	}
 	body := map[string]string{"name": name}
 	if command != "" {
@@ -45,7 +46,15 @@ func (c *Client) CreateTab(ctx context.Context, m Machine, name, command string)
 	if tab.ID == "" || tab.Layout.SessionID == "" {
 		return nil, fmt.Errorf("create tab on %s: malformed answer", m.Label)
 	}
-	return &Tab{c: c, base: m.URL, ID: tab.ID, SessionID: tab.Layout.SessionID}, nil
+	t := &Tab{c: c, base: m.URL, ID: tab.ID, SessionID: tab.Layout.SessionID}
+	if command != "" && tab.Command != command {
+		// A termulaa from before command sessions ignored the field and
+		// started an interactive shell, which would never exit. Take it
+		// down rather than wait on it.
+		t.Delete(ctx)
+		return nil, &OldMachineError{Machine: m.Label}
+	}
+	return t, nil
 }
 
 // Delete removes the tab and kills its session.

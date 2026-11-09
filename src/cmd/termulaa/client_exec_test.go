@@ -19,13 +19,35 @@ import (
 
 // fakeRendezvous stands in for memd: it signs an app token in for a cookie,
 // lists one machine, and proxies /rc/t/<id>/ to the real termulaa handlers
-// with the prefix stripped, exactly as the path-mode rendezvous does.
-func fakeRendezvous(t *testing.T) *httptest.Server {
+// with the prefix stripped, exactly as the path-mode rendezvous does. With
+// oldMachine the proxied termulaa behaves like one from before command
+// sessions: the command field is dropped on the way in. The termulaa
+// server's own URL is returned too, for looking at its state directly.
+func fakeRendezvous(t *testing.T, oldMachine bool) (rendezvous, machine *httptest.Server) {
 	t.Helper()
 	termulaa := httptest.NewServer(newTestMux(t))
 	t.Cleanup(termulaa.Close)
 	target, _ := url.Parse(termulaa.URL)
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	if oldMachine {
+		proxy.Director = nil
+		proxy.Rewrite = func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			if r.In.Method == http.MethodPost && strings.HasSuffix(r.In.URL.Path, "/api/tabs") {
+				var body map[string]string
+				json.NewDecoder(r.In.Body).Decode(&body)
+				delete(body, "command")
+				data, _ := json.Marshal(body)
+				r.Out.Body = io.NopCloser(bytes.NewReader(data))
+				r.Out.ContentLength = int64(len(data))
+				r.Out.Header.Del("Content-Length")
+			}
+		}
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			t.Logf("proxy: %v", err)
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}
 	const agent = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const prefix = "/rc/t/" + agent + "/"
 
@@ -64,11 +86,11 @@ func fakeRendezvous(t *testing.T) *httptest.Server {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, termulaa
 }
 
 func TestClientExecStreamsOutputAndExitCode(t *testing.T) {
-	srv := fakeRendezvous(t)
+	srv, _ := fakeRendezvous(t, false)
 	creds := termclient.Credentials{Server: srv.URL, Token: "mat_test"}
 
 	var out bytes.Buffer
@@ -96,8 +118,31 @@ func TestClientExecStreamsOutputAndExitCode(t *testing.T) {
 	}
 }
 
+func TestClientExecRefusesAMachineThatIgnoresCommands(t *testing.T) {
+	srv, machine := fakeRendezvous(t, true)
+	creds := termclient.Credentials{Server: srv.URL, Token: "mat_test"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := termclient.Exec(ctx, creds, termclient.ExecOptions{Machine: "box", Command: "true", Output: io.Discard})
+	var old *termclient.OldMachineError
+	if !errors.As(err, &old) || old.Machine != "box" || !strings.Contains(err.Error(), "termulaa update") {
+		t.Fatalf("err = %v, want OldMachineError for box telling them to update", err)
+	}
+	resp, err := http.Get(machine.URL + "/api/tabs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var tabs []TabInfo
+	json.NewDecoder(resp.Body).Decode(&tabs)
+	if len(tabs) != 0 {
+		t.Fatalf("%d tabs left on the old machine, want none", len(tabs))
+	}
+}
+
 func TestClientShellBridgesKeyboardAndExitCode(t *testing.T) {
-	srv := fakeRendezvous(t)
+	srv, _ := fakeRendezvous(t, false)
 	creds := termclient.Credentials{Server: srv.URL, Token: "mat_test"}
 
 	keys, typer := io.Pipe()
@@ -127,7 +172,7 @@ func TestClientShellBridgesKeyboardAndExitCode(t *testing.T) {
 }
 
 func TestClientSignInRejectedIsAuthError(t *testing.T) {
-	srv := fakeRendezvous(t)
+	srv, _ := fakeRendezvous(t, false)
 	_, err := termclient.SignIn(context.Background(), termclient.Credentials{Server: srv.URL, Token: "mat_wrong"})
 	var ae *termclient.AuthError
 	if !errors.As(err, &ae) {

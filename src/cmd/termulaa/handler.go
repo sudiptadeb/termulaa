@@ -153,13 +153,21 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 		if req.Name == "" {
 			req.Name = "Terminal"
 		}
-		var tab *Tab
-		var err error
 		if req.Command != "" {
-			tab, err = mgr.CreateCommandTab(req.Name, req.Command)
-		} else {
-			tab, err = mgr.CreateTab(req.Name)
+			tab, err := mgr.CreateCommandTab(req.Name, req.Command)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			// Echoing the command is the client's proof that this server
+			// honoured it; an older server answers with a plain tab.
+			jsonResponse(w, struct {
+				*Tab
+				Command string `json:"command"`
+			}{tab, req.Command})
+			return
 		}
+		tab, err := mgr.CreateTab(req.Name)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
