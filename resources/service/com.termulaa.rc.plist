@@ -18,6 +18,7 @@
 	<array>
 		<string>@TERMULAA_BIN@</string>
 		<string>-rc</string>
+		<string>--auto-update</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

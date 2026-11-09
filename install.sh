@@ -13,9 +13,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/sudiptadeb/termulaa/main/install.sh \
 #     | bash -s -- --service --rc-server https://memd.example.com --rc-token <token>
 #
-# Re-running upgrades in place: the binary is replaced and anything the
-# service manager runs (termulaa / termulaa-rc) is restarted onto the new
-# binary. Processes started by hand are detected and reported, never killed.
+# Services keep themselves current: they run with --auto-update. Re-running
+# upgrades in place: the binary is replaced and anything the service manager
+# runs (termulaa / termulaa-rc) is restarted onto the new binary. Processes
+# started by hand are detected and reported, never killed.
 #
 # Environment overrides:
 #   INSTALL_DIR   target directory (default: ~/.local/bin)
@@ -49,6 +50,10 @@ Options:
                 can serve this account — SSH into a Mac account with no
                 desktop login, a container — termulaa is started detached
                 instead: it outlives the terminal, but not a restart.
+                Either way both processes run with --auto-update and keep
+                themselves on the latest release (checked every five
+                minutes; the server hands its terminals over, so none
+                close).
   --no-service  Install the binary only (default).
   --rc-token TOKEN
                 Pair with a rendezvous: save the tunnel token (and
@@ -74,6 +79,7 @@ restarted onto the new binary (server first, then the tunnel agent).
 A terminal server that is already on the installed version is left alone,
 because restarting it closes its terminals. Services you disabled stay
 disabled; processes you started by hand are reported but never touched.
+A re-run that changes nothing restarts nothing.
 EOF
 }
 
@@ -267,6 +273,9 @@ fresh_pids=" "        # processes this run started detached: current by definiti
 LOG_DIR="$HOME/.termulaa/logs"
 RC_PIDFILE="$HOME/.termulaa/rc.pid"
 
+# Every process the installer sets up keeps itself current with this flag.
+AUTO_UPDATE="--auto-update"
+
 # Whether a per-user service manager can serve this account right now.
 # launchd only has a gui/<uid> domain while the user is logged in at the
 # desktop, so an SSH-only account has none.
@@ -352,6 +361,11 @@ relaunch_agent() {
         sleep 0.5
     done
     return 1
+}
+
+# The pid of a loaded launchd job, empty when it is not loaded or not running.
+launchd_pid() {
+    launchctl print "$1/$2" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}' || true
 }
 
 # Same contract as restart_services_linux, for launchd. `kickstart -k`
@@ -457,8 +471,14 @@ report_failures_and_exit() {
 
 print_update_hint() {
     echo
-    echo "To update later: re-run this command, or 'termulaa update'"
-    echo "(then restart the services)."
+    if [ "$SERVICE" = 1 ]; then
+        echo "Updates are automatic from here: each process checks for a release every"
+        echo "five minutes and moves to it in place (open terminals survive). Re-running"
+        echo "this command also works at any time."
+    else
+        echo "To update later: re-run this command, or 'termulaa update'"
+        echo "(then restart the services)."
+    fi
 }
 
 # ── Service setup (--service) ───────────────────────────────────────────────
@@ -487,8 +507,22 @@ write_if_changed() {
     return 0
 }
 
+# Whether process $1 was started with the auto-update flag.
+has_auto_update() {
+    case " $(ps -p "$1" -o args= 2>/dev/null || true) " in
+        *" $AUTO_UPDATE "*) return 0 ;;
+    esac
+    return 1
+}
+
+flag_pending_note() {
+    echo "   Its service file now carries $AUTO_UPDATE, which takes effect when it next"
+    echo "   starts (at login or boot, or on the next upgrade); until then it updates"
+    echo "   when you re-run this command."
+}
+
 install_service_linux() {
-    local unit_dir body server_changed=0 pid
+    local unit_dir body server_changed=0 rc_changed=0 pid
 
     unit_dir="$HOME/.config/systemd/user"
     mkdir -p "$unit_dir"
@@ -499,7 +533,7 @@ Description=termulaa terminal server (loopback-only)
 Documentation=https://github.com/$REPO
 
 [Service]
-ExecStart=$dest
+ExecStart=$dest $AUTO_UPDATE
 Restart=on-failure
 RestartSec=2
 
@@ -511,7 +545,7 @@ EOF
         server_changed=1
     fi
 
-    cat > "$unit_dir/termulaa-rc.service" <<EOF
+    body=$(cat <<EOF
 # Pair before enabling: run \`termulaa -rc\` once in a terminal so the
 # token is saved to ~/.termulaa/rc.json. Without it the agent cannot
 # prompt (no tty here) and exits; the start limit stops the loop.
@@ -524,27 +558,35 @@ StartLimitIntervalSec=120
 StartLimitBurst=5
 
 [Service]
-ExecStart=$dest -rc
+ExecStart=$dest -rc $AUTO_UPDATE
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 EOF
+)
+    if write_if_changed "$unit_dir/termulaa-rc.service" "$body"; then
+        rc_changed=1
+    fi
 
     systemctl --user daemon-reload
     # enable + restart, not `enable --now`: --now is a no-op for an already
     # running unit and would leave it on the replaced binary. A server that
     # is already on the installed binary is left alone: restarting it closes
-    # every terminal it holds.
+    # every terminal it holds, and a changed unit file (say, the auto-update
+    # flag arriving) is not worth that; it applies at the next start.
     systemctl --user enable termulaa.service >/dev/null 2>&1 || true
     pid=$(systemctl --user show -p MainPID --value termulaa.service 2>/dev/null || true)
-    if [ "$server_changed" = 0 ] && [ "$updated" = 0 ] \
+    if [ "$updated" = 0 ] \
        && systemctl --user is-active --quiet termulaa.service 2>/dev/null \
        && [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$(proc_state "$pid")" != "stale" ]; then
-        echo "✓ termulaa.service already running $tag — left alone so its terminals stay open"
+        echo "✓ termulaa.service already running $tag (PID $pid) — left alone so its terminals stay open"
+        if [ "$server_changed" = 1 ] && ! has_auto_update "$pid"; then
+            flag_pending_note
+        fi
     elif systemctl --user restart termulaa.service 2>/dev/null; then
-        echo "✓ termulaa.service enabled and started (systemd user unit)"
+        echo "✓ termulaa.service enabled and started (systemd user unit, $AUTO_UPDATE)"
     else
         echo "✗ termulaa.service failed to start. Check:" >&2
         echo "    systemctl --user status termulaa" >&2
@@ -553,7 +595,14 @@ EOF
 
     if rc_paired; then
         systemctl --user enable termulaa-rc.service >/dev/null 2>&1 || true
-        if systemctl --user restart termulaa-rc.service 2>/dev/null; then
+        pid=$(systemctl --user show -p MainPID --value termulaa-rc.service 2>/dev/null || true)
+        # The agent is a stateless pump: it is restarted whenever anything
+        # about it changed (binary, token, unit file), and left alone otherwise.
+        if [ "$updated" = 0 ] && [ "$paired_now" = 0 ] && [ "$rc_changed" = 0 ] \
+           && systemctl --user is-active --quiet termulaa-rc.service 2>/dev/null \
+           && [ -n "$pid" ] && [ "$pid" != "0" ] && has_auto_update "$pid"; then
+            echo "✓ termulaa-rc.service already running (PID $pid) — nothing changed, left alone"
+        elif systemctl --user restart termulaa-rc.service 2>/dev/null; then
             echo "✓ termulaa-rc.service enabled and started (token found in ~/.termulaa/rc.json)"
         else
             echo "✗ termulaa-rc.service failed to start. Check:" >&2
@@ -577,7 +626,7 @@ EOF
 }
 
 install_service_darwin() {
-    local agents_dir uid body server_changed=0
+    local agents_dir uid body server_changed=0 rc_changed=0 pid
 
     agents_dir="$HOME/Library/LaunchAgents"
     mkdir -p "$agents_dir" "$LOG_DIR"
@@ -593,6 +642,7 @@ install_service_darwin() {
 	<key>ProgramArguments</key>
 	<array>
 		<string>$dest</string>
+		<string>$AUTO_UPDATE</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -610,7 +660,7 @@ EOF
         server_changed=1
     fi
 
-    cat > "$agents_dir/com.termulaa.rc.plist" <<EOF
+    body=$(cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Pair before loading: run \`termulaa -rc\` once in a terminal so the
@@ -625,6 +675,7 @@ EOF
 	<array>
 		<string>$dest</string>
 		<string>-rc</string>
+		<string>$AUTO_UPDATE</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -642,17 +693,26 @@ EOF
 </dict>
 </plist>
 EOF
+)
+    if write_if_changed "$agents_dir/com.termulaa.rc.plist" "$body"; then
+        rc_changed=1
+    fi
 
     # Reload so re-runs pick up the rewritten plists. relaunch_agent retries
     # the bootstrap: right after a bootout, launchd can still hold the label
     # for a moment and the first attempt fails with an I/O error. A server
     # that is already on the installed binary is left alone: reloading it
-    # closes every terminal it holds.
-    if [ "$server_changed" = 0 ] && [ "$updated" = 0 ] \
-       && launchctl print "gui/$uid/com.termulaa.server" >/dev/null 2>&1; then
-        echo "✓ com.termulaa.server already running $tag — left alone so its terminals stay open"
+    # closes every terminal it holds, and a changed plist (say, the
+    # auto-update flag arriving) is not worth that; it applies at the next
+    # load.
+    pid=$(launchd_pid "gui/$uid" com.termulaa.server)
+    if [ "$updated" = 0 ] && [ -n "$pid" ]; then
+        echo "✓ com.termulaa.server already running $tag (PID $pid) — left alone so its terminals stay open"
+        if [ "$server_changed" = 1 ] && ! has_auto_update "$pid"; then
+            flag_pending_note
+        fi
     elif relaunch_agent "gui/$uid" com.termulaa.server; then
-        echo "✓ com.termulaa.server loaded (LaunchAgent, logs in ~/.termulaa/logs/)"
+        echo "✓ com.termulaa.server loaded (LaunchAgent, $AUTO_UPDATE, logs in ~/.termulaa/logs/)"
     else
         echo "✗ com.termulaa.server failed to load. Check:" >&2
         echo "    launchctl print gui/$uid/com.termulaa.server" >&2
@@ -660,7 +720,13 @@ EOF
     fi
 
     if rc_paired; then
-        if relaunch_agent "gui/$uid" com.termulaa.rc; then
+        pid=$(launchd_pid "gui/$uid" com.termulaa.rc)
+        # The agent is a stateless pump: it is reloaded whenever anything
+        # about it changed (binary, token, plist), and left alone otherwise.
+        if [ "$updated" = 0 ] && [ "$paired_now" = 0 ] && [ "$rc_changed" = 0 ] \
+           && [ -n "$pid" ] && has_auto_update "$pid"; then
+            echo "✓ com.termulaa.rc already running (PID $pid) — nothing changed, left alone"
+        elif relaunch_agent "gui/$uid" com.termulaa.rc; then
             echo "✓ com.termulaa.rc loaded (token found in ~/.termulaa/rc.json)"
         else
             echo "✗ com.termulaa.rc failed to load. Check:" >&2
@@ -721,13 +787,17 @@ start_detached() {
     pid=$(termulaa_pids server | head -1)
     if [ -n "$pid" ]; then
         echo "✓ Terminal server already running (PID $pid) — left alone so its terminals stay open"
+        if ! has_auto_update "$pid"; then
+            echo "   It was started without $AUTO_UPDATE; it gets it when it next starts, and"
+            echo "   updates when you re-run this command until then."
+        fi
     else
-        nohup "$dest" >> "$LOG_DIR/server.log" 2>&1 < /dev/null &
+        nohup "$dest" "$AUTO_UPDATE" >> "$LOG_DIR/server.log" 2>&1 < /dev/null &
         pid=$!
         fresh_pids="$fresh_pids$pid "
         sleep 1
         if kill -0 "$pid" 2>/dev/null; then
-            echo "✓ Terminal server started (PID $pid, log $LOG_DIR/server.log)"
+            echo "✓ Terminal server started (PID $pid, $AUTO_UPDATE, log $LOG_DIR/server.log)"
         else
             echo "✗ Terminal server failed to start. Its log says:" >&2
             tail -n 5 "$LOG_DIR/server.log" 2>/dev/null | sed 's/^/    /' >&2
@@ -750,7 +820,7 @@ start_detached() {
             fresh_pids="$fresh_pids$pid "
             return 0
         fi
-        if [ "$updated" = 0 ] && [ "$paired_now" = 0 ]; then
+        if [ "$updated" = 0 ] && [ "$paired_now" = 0 ] && has_auto_update "$pid"; then
             echo "✓ Tunnel agent already running (PID $pid) — nothing changed, left alone"
             return 0
         fi
@@ -762,7 +832,7 @@ start_detached() {
         done
     done
 
-    nohup "$dest" -rc >> "$LOG_DIR/rc.log" 2>&1 < /dev/null &
+    nohup "$dest" -rc "$AUTO_UPDATE" >> "$LOG_DIR/rc.log" 2>&1 < /dev/null &
     pid=$!
     printf '%s\n' "$pid" > "$RC_PIDFILE"
     fresh_pids="$fresh_pids$pid "

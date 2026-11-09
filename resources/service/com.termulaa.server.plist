@@ -11,6 +11,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>@TERMULAA_BIN@</string>
+		<string>--auto-update</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

@@ -15,7 +15,7 @@ StartLimitIntervalSec=120
 StartLimitBurst=5
 
 [Service]
-ExecStart=@TERMULAA_BIN@ -rc
+ExecStart=@TERMULAA_BIN@ -rc --auto-update
 Restart=on-failure
 RestartSec=5
 

@@ -6,7 +6,7 @@ Description=termulaa terminal server (loopback-only)
 Documentation=https://github.com/sudiptadeb/termulaa
 
 [Service]
-ExecStart=@TERMULAA_BIN@
+ExecStart=@TERMULAA_BIN@ --auto-update
 Restart=on-failure
 RestartSec=2
 
