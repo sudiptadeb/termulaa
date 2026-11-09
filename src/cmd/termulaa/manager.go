@@ -120,8 +120,9 @@ func (m *SessionManager) historyPath(id string) string {
 }
 
 // LoadState reads state.json and populates the sessions/tabs maps.
-// Restored sessions are marked alive=false since their PTYs are gone.
-// Entries older than the configured cleanup window are discarded.
+// Restored sessions are marked alive=false since their PTYs are gone
+// (Adopt revives the ones handed over by an in-place restart). A tab
+// idle for longer than the cleanup window is discarded with its sessions.
 func (m *SessionManager) LoadState() {
 	data, err := os.ReadFile(m.stateFilePath())
 	if err != nil {
@@ -147,13 +148,6 @@ func (m *SessionManager) LoadState() {
 	defer m.mu.Unlock()
 
 	for id, meta := range state.Sessions {
-		if !cutoff.IsZero() && meta.LastActive.Before(cutoff) {
-			// Clean up old scrollback file.
-			os.Remove(m.scrollbackPath(id))
-			os.Remove(m.historyPath(id))
-			continue
-		}
-
 		s := &Session{
 			ID:         meta.ID,
 			CWD:        meta.CWD,
@@ -193,8 +187,20 @@ func (m *SessionManager) LoadState() {
 		loaded++
 	}
 
+	// A tab is as recent as the latest activity in it: its own stamp moves
+	// only on a rename or a layout change, its sessions' on every byte of
+	// output or input. Judged by its own stamp alone, a tab whose shell was
+	// in daily use expired at the first restart after the cleanup window,
+	// and the restart then threw its sessions away as orphans, live PTY and
+	// all. Sessions are never judged on their own: they go with their tab.
 	for id, tab := range state.Tabs {
-		if !cutoff.IsZero() && tab.LastActive.Before(cutoff) {
+		last := tab.LastActive
+		for _, sessionID := range tab.SessionIDs() {
+			if s, ok := m.sessions[sessionID]; ok && s.LastActive.After(last) {
+				last = s.LastActive
+			}
+		}
+		if !cutoff.IsZero() && last.Before(cutoff) {
 			continue
 		}
 		m.tabs[id] = tab
