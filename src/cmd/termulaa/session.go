@@ -993,6 +993,13 @@ func (s *Session) Kill() {
 	s.mu.Unlock()
 }
 
+// IsAlive reports whether the process is still running.
+func (s *Session) IsAlive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Alive
+}
+
 // Info returns a JSON-safe snapshot of the session state.
 func (s *Session) Info() SessionInfo {
 	s.mu.Lock()

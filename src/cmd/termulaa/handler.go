@@ -513,7 +513,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	// client sees the old output followed by the new shell's startup. A
 	// finished command session is never revived; see below.
 	revived := false
-	if !sess.Alive && sess.Command == "" {
+	if !sess.IsAlive() && sess.Command == "" {
 		var err error
 		sess, err = mgr.ReviveSession(sessionID)
 		if err != nil {
@@ -532,7 +532,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	conn.SetReadLimit(wsMaxMessageSize)
 	armReadDeadline(conn)
 
-	if !sess.Alive {
+	if !sess.IsAlive() {
 		serveFinishedSession(conn, sess, from)
 		log.Printf("session-ws: served finished command session %s (remote=%s, exit=%d)", sessionID, r.RemoteAddr, sess.ExitCode)
 		return

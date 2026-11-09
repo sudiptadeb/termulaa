@@ -83,7 +83,7 @@ func (t *Tab) Info(sessions map[string]*Session) TabInfo {
 		if node.Type == "pane" {
 			paneCount++
 			if s, ok := sessions[node.SessionID]; ok {
-				if s.Alive {
+				if s.IsAlive() {
 					alive = true
 				}
 				if out := s.LastOutput(); out.After(lastOutput) {

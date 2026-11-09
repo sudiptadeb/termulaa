@@ -337,7 +337,7 @@ func (m *SessionManager) Stop() {
 	m.mu.RLock()
 	alive := make([]*Session, 0)
 	for _, s := range m.sessions {
-		if s.Alive {
+		if s.IsAlive() {
 			alive = append(alive, s)
 		}
 	}
@@ -388,7 +388,7 @@ func (m *SessionManager) pollCWDs() {
 			m.mu.RLock()
 			sessions := make([]*Session, 0)
 			for _, s := range m.sessions {
-				if s.Alive && s.pid != 0 {
+				if s.pid != 0 && s.IsAlive() {
 					sessions = append(sessions, s)
 				}
 			}
@@ -528,7 +528,7 @@ func (m *SessionManager) DeleteSession(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	if s.Alive {
+	if s.IsAlive() {
 		s.Kill()
 	}
 
