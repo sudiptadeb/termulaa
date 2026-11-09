@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -109,5 +110,34 @@ func TestClientQueueCoalescesAndOverflows(t *testing.T) {
 	c.queueBinary([]byte("late"))
 	if f, _ := c.takePending(); len(f) != 0 {
 		t.Fatal("an overflowed client must not accept more output")
+	}
+}
+
+func TestRingBufferSince(t *testing.T) {
+	r := NewRingBuffer(8)
+	r.Write([]byte("abcdef"))
+	if data, off := r.Since(2); string(data) != "cdef" || off != 2 {
+		t.Fatalf("Since(2) = %q@%d, want cdef@2", data, off)
+	}
+	r.Write([]byte("ghijkl")) // 12 bytes written, the ring holds "efghijkl"
+	if data, off := r.Since(0); string(data) != "efghijkl" || off != 4 {
+		t.Fatalf("Since(0) after wrap = %q@%d, want efghijkl@4", data, off)
+	}
+	if data, off := r.Since(10); string(data) != "kl" || off != 10 {
+		t.Fatalf("Since(10) = %q@%d, want kl@10", data, off)
+	}
+	if data, off := r.Since(99); len(data) != 0 || off != 12 {
+		t.Fatalf("Since past end = %q@%d, want empty@12", data, off)
+	}
+
+	path := filepath.Join(t.TempDir(), "ring")
+	data, total := r.Dump()
+	os.WriteFile(path, data, 0600)
+	loaded := NewRingBuffer(8)
+	if err := loaded.LoadFrom(path, total); err != nil {
+		t.Fatal(err)
+	}
+	if data, off := loaded.Since(10); string(data) != "kl" || off != 10 {
+		t.Fatalf("Since(10) after load = %q@%d, want kl@10", data, off)
 	}
 }

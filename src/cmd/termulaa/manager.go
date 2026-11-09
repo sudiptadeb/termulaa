@@ -181,9 +181,11 @@ func (m *SessionManager) LoadState() {
 		// Load scrollback if available and rebuild the terminal picture
 		// from it, so the session shows its last output until revived.
 		sbPath := m.scrollbackPath(id)
-		if err := s.scrollback.LoadFrom(sbPath); err != nil && !os.IsNotExist(err) {
+		if err := s.scrollback.LoadFrom(sbPath, meta.OutputBytes); err != nil && !os.IsNotExist(err) {
 			log.Printf("manager: failed to load scrollback for %s: %v", id, err)
 		}
+		_, saved := s.scrollback.Dump()
+		s.savedOutput.Store(saved)
 		s.term = restoreTerminal(meta.Cols, meta.Rows, s.scrollback)
 
 		m.sessions[id] = s
@@ -265,8 +267,9 @@ func (m *SessionManager) HandoffFiles() []*os.File {
 	return files
 }
 
-// SaveState persists all session metadata and tab data to state.json.
-// For alive sessions, scrollback is also saved to disk.
+// SaveState persists all session metadata and tab data to state.json, and
+// the scrollback of every session that produced output since its last save
+// (so a session that ended since then is saved to its final byte).
 func (m *SessionManager) SaveState() {
 	m.mu.RLock()
 
@@ -277,14 +280,18 @@ func (m *SessionManager) SaveState() {
 
 	for id, s := range m.sessions {
 		meta := s.Meta()
+		data, total := s.scrollback.Dump()
+		meta.OutputBytes = total
 		state.Sessions[id] = &meta
 
-		// Save scrollback for alive sessions.
-		if s.Alive {
-			if err := s.scrollback.SaveTo(m.scrollbackPath(id)); err != nil {
-				log.Printf("manager: failed to save scrollback for %s: %v", id, err)
-			}
+		if total == s.savedOutput.Load() {
+			continue
 		}
+		if err := os.WriteFile(m.scrollbackPath(id), data, 0600); err != nil {
+			log.Printf("manager: failed to save scrollback for %s: %v", id, err)
+			continue
+		}
+		s.savedOutput.Store(total)
 	}
 
 	for id, tab := range m.tabs {

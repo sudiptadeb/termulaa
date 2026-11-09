@@ -39,7 +39,11 @@ type RingBuffer struct {
 	buf  []byte
 	pos  int
 	full bool
-	mu   sync.Mutex
+	// total counts every byte ever written, so the buffer's contents are
+	// the stream's bytes [total-Len, total): a client that knows how many
+	// bytes it has seen can be given exactly the rest.
+	total int64
+	mu    sync.Mutex
 }
 
 func NewRingBuffer(size int) *RingBuffer {
@@ -53,6 +57,7 @@ func (r *RingBuffer) Write(p []byte) (int, error) {
 
 	n := len(p)
 	bufLen := len(r.buf)
+	r.total += int64(n)
 
 	// If incoming data is larger than the buffer, only keep the tail.
 	if n >= bufLen {
@@ -95,10 +100,40 @@ func (r *RingBuffer) ReadReplay() []byte {
 	return cleanReplayStart(data, wrapped)
 }
 
+// Since returns the stream's bytes from offset from onward, and the offset
+// the returned data actually starts at: later than from when the oldest
+// bytes have already been overwritten (the caller lost that much), and never
+// past the end of the stream.
+func (r *RingBuffer) Since(from int64) ([]byte, int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, _ := r.dump()
+	start := r.total - int64(len(data))
+	if from < start {
+		from = start
+	}
+	if from > r.total {
+		from = r.total
+	}
+	return data[from-start:], from
+}
+
+// Dump returns the contents and the stream offset they end at, read under
+// one lock so the two agree.
+func (r *RingBuffer) Dump() ([]byte, int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, _ := r.dump()
+	return data, r.total
+}
+
 func (r *RingBuffer) readAll() ([]byte, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.dump()
+}
 
+func (r *RingBuffer) dump() ([]byte, bool) {
 	if !r.full {
 		out := make([]byte, r.pos)
 		copy(out, r.buf[:r.pos])
@@ -148,14 +183,10 @@ func (r *RingBuffer) Len() int {
 	return r.pos
 }
 
-// SaveTo dumps the ring buffer contents to a file.
-func (r *RingBuffer) SaveTo(path string) error {
-	data := r.ReadAll()
-	return os.WriteFile(path, data, 0600)
-}
-
-// LoadFrom reads a file into the ring buffer, replacing any existing content.
-func (r *RingBuffer) LoadFrom(path string) error {
+// LoadFrom reads a file into the ring buffer, replacing any existing
+// content. total is the stream offset the file's contents end at, as saved
+// beside it; a value shorter than the file cannot be right and is corrected.
+func (r *RingBuffer) LoadFrom(path string, total int64) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -163,6 +194,11 @@ func (r *RingBuffer) LoadFrom(path string) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if total < int64(len(data)) {
+		total = int64(len(data))
+	}
+	r.total = total
 
 	bufLen := len(r.buf)
 	if len(data) >= bufLen {
@@ -307,15 +343,16 @@ func (c *wsClient) writePump(sess *Session) {
 		case <-c.done:
 			return
 		case <-sess.Done():
-			// Session died — flush what is queued, then notify the client.
-			// The exit notice is a TextMessage so xterm.js never renders
-			// it as terminal output.
+			// Session died — flush what is queued, in order, then notify
+			// the client. The exit notice is a TextMessage so xterm.js never
+			// renders it as terminal output.
 			frames, _ := c.takePending()
 			for _, f := range frames {
+				msgType := websocket.BinaryMessage
 				if f.text {
-					continue
+					msgType = websocket.TextMessage
 				}
-				if err := c.conn.WriteMessage(websocket.BinaryMessage, f.data); err != nil {
+				if err := c.conn.WriteMessage(msgType, f.data); err != nil {
 					return
 				}
 			}
@@ -358,6 +395,8 @@ type SessionMeta struct {
 	ExitCode   int       `json:"exit_code"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastActive time.Time `json:"last_active"`
+	// OutputBytes is the stream offset the saved scrollback file ends at.
+	OutputBytes int64 `json:"output_bytes,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +430,10 @@ type Session struct {
 	// byte (0 = never). Kept as an atomic so readPump can stamp it without
 	// holding mu and API readers see a race-free value.
 	lastOutput atomic.Int64
+
+	// savedOutput is the stream offset the scrollback file on disk ends at,
+	// so state saves rewrite it only when there is something new.
+	savedOutput atomic.Int64
 
 	// term is the headless terminal that mirrors what an attached client
 	// would show. Every PTY byte is fed to it; a joining client receives
@@ -700,6 +743,34 @@ func (s *Session) SnapshotMessage() []byte {
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
 	return s.snapshotMessage()
+}
+
+// AttachClientFrom joins a client that wants the raw byte stream rather than
+// a picture: it is first sent a replay control frame naming the stream
+// offset the replay starts at, then the raw output from there, then joins
+// the fan-out under the same lock so the live bytes continue exactly where
+// the replay ended. The offset is from when the ring still holds that byte,
+// and the oldest byte held otherwise.
+func (s *Session) AttachClientFrom(c *wsClient, from int64) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+
+	queueReplay(c, s.scrollback, from)
+
+	s.mu.Lock()
+	s.clients = append(s.clients, c)
+	s.mu.Unlock()
+}
+
+func queueReplay(c *wsClient, ring *RingBuffer, from int64) {
+	data, offset := ring.Since(from)
+	msg, _ := json.Marshal(map[string]interface{}{"type": "replay", "offset": offset})
+	c.queueText(msg)
+	for len(data) > 0 {
+		n := min(len(data), maxCoalescedFrame)
+		c.queueBinary(data[:n])
+		data = data[n:]
+	}
 }
 
 // InAltScreen reports whether the application currently holds the

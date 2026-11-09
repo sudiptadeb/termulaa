@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -480,6 +481,17 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		http.Error(w, "session attachment forbidden", http.StatusForbidden)
 		return
 	}
+	// A client that asks for the output from a byte offset wants the raw
+	// stream (resumable), not a picture of the terminal.
+	var from int64 = -1
+	if v := r.URL.Query().Get("from"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid from offset", http.StatusBadRequest)
+			return
+		}
+		from = n
+	}
 
 	// Look up session
 	sess := mgr.GetSession(sessionID)
@@ -513,7 +525,7 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	armReadDeadline(conn)
 
 	if !sess.Alive {
-		serveFinishedSession(conn, sess)
+		serveFinishedSession(conn, sess, from)
 		log.Printf("session-ws: served finished command session %s (remote=%s, exit=%d)", sessionID, r.RemoteAddr, sess.ExitCode)
 		return
 	}
@@ -542,6 +554,10 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		case sizeChanged = <-sized:
 		case <-time.After(attachGrace):
 		case <-client.done:
+			return
+		}
+		if from >= 0 {
+			sess.AttachClientFrom(client, from)
 			return
 		}
 		replayed := sess.AttachClient(client, true)
@@ -602,11 +618,24 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 }
 
 // serveFinishedSession answers an attach to a command session whose command
-// has already ended: its last picture and its exit code, then a close. The
-// command is not run again.
-func serveFinishedSession(conn *websocket.Conn, sess *Session) {
+// has already ended: its last picture (or, from an offset, the rest of its
+// raw output) and its exit code, then a close. The command is not run again.
+func serveFinishedSession(conn *websocket.Conn, sess *Session, from int64) {
 	defer conn.Close()
-	if msg := sess.SnapshotMessage(); msg != nil {
+	if from >= 0 {
+		c := newWSClient(conn, "", "")
+		queueReplay(c, sess.scrollback, from)
+		frames, _ := c.takePending()
+		for _, f := range frames {
+			msgType := websocket.BinaryMessage
+			if f.text {
+				msgType = websocket.TextMessage
+			}
+			if err := conn.WriteMessage(msgType, f.data); err != nil {
+				return
+			}
+		}
+	} else if msg := sess.SnapshotMessage(); msg != nil {
 		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			return
 		}
