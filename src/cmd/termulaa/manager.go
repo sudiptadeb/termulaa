@@ -158,6 +158,7 @@ func (m *SessionManager) LoadState() {
 			ID:         meta.ID,
 			CWD:        meta.CWD,
 			Shell:      meta.Shell,
+			Command:    meta.Command,
 			Cols:       meta.Cols,
 			Rows:       meta.Rows,
 			ExitCode:   meta.ExitCode,
@@ -544,6 +545,9 @@ func (m *SessionManager) ReviveSession(id string) (*Session, error) {
 		return old, nil // Already alive, nothing to do.
 	}
 	m.mu.Unlock()
+	if old.Command != "" {
+		return nil, fmt.Errorf("session %s ran a command and is finished", id)
+	}
 
 	// Capture old state.
 	cwd := old.CWD
@@ -584,7 +588,29 @@ func (m *SessionManager) CreateTab(name string) (*Tab, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create tab: %w", err)
 	}
+	return m.addTab(name, s), nil
+}
 
+// CreateCommandTab creates a tab whose single session runs command under a
+// login shell (`shell -lc command`) instead of an interactive shell.
+func (m *SessionManager) CreateCommandTab(name, command string) (*Tab, error) {
+	id := generateID()
+	cols, rows := m.defaultSessionSize()
+	cwd := m.defaultSessionCWD()
+	s, err := NewCommandSession(id, m.shell, command, cwd, cols, rows, m.historyPath(id), m.cfg.HistoryLimit, m.scrollbackBytes())
+	if err != nil {
+		return nil, fmt.Errorf("create command tab: %w", err)
+	}
+
+	m.mu.Lock()
+	m.sessions[id] = s
+	m.mu.Unlock()
+
+	log.Printf("manager: created command session %s (shell=%s, cwd=%s, %d-byte command)", id, m.shell, cwd, len(command))
+	return m.addTab(name, s), nil
+}
+
+func (m *SessionManager) addTab(name string, s *Session) *Tab {
 	tabID := generateID()
 	tab := NewTab(tabID, name, s.ID)
 
@@ -593,7 +619,7 @@ func (m *SessionManager) CreateTab(name string) (*Tab, error) {
 	m.mu.Unlock()
 
 	log.Printf("manager: created tab %s (%q) with session %s", tabID, name, s.ID)
-	return tab, nil
+	return tab
 }
 
 // GetTab returns a tab by ID, or nil if not found.

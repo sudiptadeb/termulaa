@@ -145,13 +145,20 @@ func registerRoutes(mux *http.ServeMux, mgr *SessionManager, cfg *FullConfig) {
 	})
 	mux.HandleFunc("POST /api/tabs", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Name string `json:"name"`
+			Name    string `json:"name"`
+			Command string `json:"command"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Name == "" {
 			req.Name = "Terminal"
 		}
-		tab, err := mgr.CreateTab(req.Name)
+		var tab *Tab
+		var err error
+		if req.Command != "" {
+			tab, err = mgr.CreateCommandTab(req.Name, req.Command)
+		} else {
+			tab, err = mgr.CreateTab(req.Name)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -481,11 +488,12 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 		return
 	}
 
-	// A dead session is revived on attach. Its terminal state (scrollback
-	// and last screen) carries over into the new session, so the client
-	// sees the old output followed by the new shell's startup.
+	// A dead shell session is revived on attach. Its terminal state
+	// (scrollback and last screen) carries over into the new session, so the
+	// client sees the old output followed by the new shell's startup. A
+	// finished command session is never revived; see below.
 	revived := false
-	if !sess.Alive {
+	if !sess.Alive && sess.Command == "" {
 		var err error
 		sess, err = mgr.ReviveSession(sessionID)
 		if err != nil {
@@ -503,6 +511,12 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	}
 	conn.SetReadLimit(wsMaxMessageSize)
 	armReadDeadline(conn)
+
+	if !sess.Alive {
+		serveFinishedSession(conn, sess)
+		log.Printf("session-ws: served finished command session %s (remote=%s, exit=%d)", sessionID, r.RemoteAddr, sess.ExitCode)
+		return
+	}
 
 	log.Printf("session-ws: client attached to session %s (remote=%s, revived=%v)", sessionID, r.RemoteAddr, revived)
 
@@ -585,6 +599,23 @@ func handleSessionWS(w http.ResponseWriter, r *http.Request, mgr *SessionManager
 	}
 
 	close(client.done)
+}
+
+// serveFinishedSession answers an attach to a command session whose command
+// has already ended: its last picture and its exit code, then a close. The
+// command is not run again.
+func serveFinishedSession(conn *websocket.Conn, sess *Session) {
+	defer conn.Close()
+	if msg := sess.SnapshotMessage(); msg != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
+	exitMsg, _ := json.Marshal(map[string]interface{}{"type": "exit", "code": sess.ExitCode})
+	if err := conn.WriteMessage(websocket.TextMessage, exitMsg); err != nil {
+		return
+	}
+	conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {

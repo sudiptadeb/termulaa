@@ -339,6 +339,7 @@ type SessionInfo struct {
 	Alive      bool      `json:"alive"`
 	CWD        string    `json:"cwd"`
 	Shell      string    `json:"shell"`
+	Command    string    `json:"command,omitempty"`
 	Cols       int       `json:"cols"`
 	Rows       int       `json:"rows"`
 	ExitCode   int       `json:"exit_code"`
@@ -351,6 +352,7 @@ type SessionMeta struct {
 	ID         string    `json:"id"`
 	CWD        string    `json:"cwd"`
 	Shell      string    `json:"shell"`
+	Command    string    `json:"command,omitempty"`
 	Cols       int       `json:"cols"`
 	Rows       int       `json:"rows"`
 	ExitCode   int       `json:"exit_code"`
@@ -363,9 +365,12 @@ type SessionMeta struct {
 // ---------------------------------------------------------------------------
 
 type Session struct {
-	ID         string
-	CWD        string
+	ID  string
+	CWD string
+	// Shell is the program in the PTY; Command, when set, is the one command
+	// it runs (`shell -lc Command`) instead of an interactive shell.
 	Shell      string
+	Command    string
 	Cols       int
 	Rows       int
 	ExitCode   int
@@ -418,6 +423,19 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 	// Login-shell convention: argv[0] = "-bash" so the shell reads all startup files.
 	cmd := exec.Command(shell)
 	cmd.Args = []string{"-" + filepath.Base(shell)}
+	return startSession(id, cmd, "", shell, cwd, cols, rows, histFile, historyLimit, scrollbackBytes, term)
+}
+
+// NewCommandSession runs one command under a login shell in a PTY. The
+// session is finished for good when the command ends: it is never revived,
+// so attaching to it later yields its last output and exit code, not a
+// second run.
+func NewCommandSession(id, shell, command, cwd string, cols, rows int, histFile string, historyLimit, scrollbackBytes int) (*Session, error) {
+	cmd := exec.Command(shell, "-lc", command)
+	return startSession(id, cmd, command, shell, cwd, cols, rows, histFile, historyLimit, scrollbackBytes, nil)
+}
+
+func startSession(id string, cmd *exec.Cmd, command, shell, cwd string, cols, rows int, histFile string, historyLimit, scrollbackBytes int, term *vterm.Terminal) (*Session, error) {
 	cmd.Dir = cwd
 
 	// Inherit full environment, override TERM and HISTFILE.
@@ -487,6 +505,7 @@ func NewSession(id, shell, cwd string, cols, rows int, histFile string, historyL
 		ID:         id,
 		CWD:        cwd,
 		Shell:      shell,
+		Command:    command,
 		Cols:       cols,
 		Rows:       rows,
 		Alive:      true,
@@ -537,6 +556,7 @@ func AdoptSession(meta SessionMeta, ptmx *os.File, pid int, scrollback *RingBuff
 		ID:         meta.ID,
 		CWD:        meta.CWD,
 		Shell:      meta.Shell,
+		Command:    meta.Command,
 		Cols:       meta.Cols,
 		Rows:       meta.Rows,
 		Alive:      true,
@@ -646,12 +666,7 @@ func (s *Session) AttachClient(c *wsClient, replay bool) (replayed bool) {
 	defer s.outMu.Unlock()
 
 	if replay {
-		if data := s.term.Snapshot(); len(data) > 0 {
-			msg, _ := json.Marshal(map[string]interface{}{
-				"type":     "scrollback",
-				"snapshot": true,
-				"data":     base64.StdEncoding.EncodeToString(data),
-			})
+		if msg := s.snapshotMessage(); msg != nil {
 			c.queueText(msg)
 			replayed = true
 		}
@@ -661,6 +676,28 @@ func (s *Session) AttachClient(c *wsClient, replay bool) (replayed bool) {
 	s.clients = append(s.clients, c)
 	s.mu.Unlock()
 	return replayed
+}
+
+// snapshotMessage is the control frame carrying the terminal's current
+// picture, or nil when there is nothing to show. Caller holds outMu.
+func (s *Session) snapshotMessage() []byte {
+	data := s.term.Snapshot()
+	if len(data) == 0 {
+		return nil
+	}
+	msg, _ := json.Marshal(map[string]interface{}{
+		"type":     "scrollback",
+		"snapshot": true,
+		"data":     base64.StdEncoding.EncodeToString(data),
+	})
+	return msg
+}
+
+// SnapshotMessage is snapshotMessage for callers outside the fan-out.
+func (s *Session) SnapshotMessage() []byte {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	return s.snapshotMessage()
 }
 
 // InAltScreen reports whether the application currently holds the
@@ -840,6 +877,7 @@ func (s *Session) Info() SessionInfo {
 		Alive:      s.Alive,
 		CWD:        s.CWD,
 		Shell:      s.Shell,
+		Command:    s.Command,
 		Cols:       s.Cols,
 		Rows:       s.Rows,
 		ExitCode:   s.ExitCode,
@@ -856,6 +894,7 @@ func (s *Session) Meta() SessionMeta {
 		ID:         s.ID,
 		CWD:        s.CWD,
 		Shell:      s.Shell,
+		Command:    s.Command,
 		Cols:       s.Cols,
 		Rows:       s.Rows,
 		ExitCode:   s.ExitCode,
