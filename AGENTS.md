@@ -146,6 +146,15 @@ New behavior should add focused `*_test.go` coverage. Table-driven tests
 for handler / session / state logic. Coverage is light today — adding
 meaningful tests is always welcome (see issue #3).
 
+Before a release that touches the terminal client, the session protocol
+or the agent, run the end-to-end suite against a memd checkout:
+`MEMD_SRC=~/src/memd resources/scripts/client-e2e.sh` (add
+`TERMULAA_OLD_BIN=<a released termulaa>` to also prove `exec` refuses a
+machine that predates command sessions). It builds everything from the
+tree, runs memd, the agent and the server in isolation under a scratch
+HOME, and drives `shell` through a real PTY (`src/cmd/ptyharness`). It
+is not in CI because it needs memd.
+
 `src/internal/vterm` has a differential test, `TestAgainstXterm`, that
 feeds a corpus to both the emulator and the vendored xterm.js bundle in
 headless Chromium and compares every line, cell attribute, the cursor
@@ -203,6 +212,7 @@ xterm.js the reconnected screen is wrong.
 | `install.sh` | Release installer; `--service` sets up user services |
 | `resources/service/` | systemd user unit + launchd plist templates |
 | `resources/scripts/installer-smoke.sh` | CI check of `install.sh`: pair, start, re-run keeps the server |
+| `resources/scripts/client-e2e.sh` | Pre-release end-to-end test of the terminal client through memd, the agent and the server; `src/cmd/ptyharness` drives `shell` under a PTY for it |
 | `.github/workflows/build.yml` | gofmt, go vet, go test, build, installer smoke test on push/PR |
 | `.github/workflows/release.yml` | Release on tag push, or on `main` when `VERSION` moves |
 
