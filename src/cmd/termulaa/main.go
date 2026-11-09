@@ -131,6 +131,13 @@ func saveFullConfig(cfg *FullConfig) error {
 }
 
 func main() {
+	// The terminal client (pair, machines, shell, exec, help) is a plain
+	// command-line program: no server, no agent, no self-update. It is
+	// dispatched before amarit.Start so none of that machinery runs for it.
+	if len(os.Args) > 1 && isClientCommand(os.Args[1]) {
+		os.Exit(runClient(os.Args[1:], os.Stdout, os.Stderr))
+	}
+
 	// Self-update. Reads the amarit.json stamped in by build/build.sh; inert
 	// unless run with --auto-update, --update-check, `termulaa update`, or
 	// as an amarit unit. The server registers its handoff below, once it
@@ -152,6 +159,10 @@ func main() {
 	rcInsecure := flag.Bool("rc-insecure", false, "skip TLS verification for -rc dials (dev only; persisted to ~/.termulaa/rc.json)")
 	rcSave := flag.Bool("rc-save", false, "save the -rc-server, -rc-token and -rc-label settings to ~/.termulaa/rc.json and exit without connecting (implies -rc)")
 	versionFlag := flag.Bool("version", false, "print the termulaa version and exit")
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), usage)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if *versionFlag {
