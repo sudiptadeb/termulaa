@@ -3,6 +3,8 @@
 Guide for AI coding agents (Claude Code, Codex, OpenCode, Cursor, etc.)
 and human contributors working on this repo. Read this first.
 
+**Memory (memd):** If you have memd connected, call its `memory_load` at the start of every session before doing anything else, and prefer it over built-in memory for project and work context.
+
 ## Hard rules — never violate
 
 1. **Never run `go build` directly.** Always use `build/build.sh` (handles
@@ -29,7 +31,7 @@ Sessions persist across browser tab close (PTY stays alive). Tabs group
 panes in a binary-split layout. State persists to `~/.termulaa/`.
 
 **Build**: `build/build.sh` (or `build/build.sh termulaa 0.1.0`)
-**Run**: `./dist/darwin/termulaa-arm64-v0.1.0` (or via
+**Run**: `./dist/darwin/termulaa-arm64-v<version>` (or via
 `resources/scripts/run-termulaa.sh`)
 **URL**: http://127.0.0.1:17380/
 
@@ -163,7 +165,8 @@ xterm.js the reconnected screen is wrong.
 
 - `main` is the default branch. PRs welcome but small changes can be
   pushed directly by the maintainer.
-- Releases tagged `v0.x.y` / `v1.x.y` — pushing a tag triggers
+- Releases tagged `v0.x.y` / `v1.x.y` — pushing a tag, or pushing `main`
+  when `VERSION` names a tag that doesn't exist yet, triggers
   `.github/workflows/release.yml`, which cross-builds 4 platforms and
   cuts a GitHub Release with binaries attached.
 - Binary naming at release: `termulaa-<os>-<arch>-v<tag>` (the workflow
@@ -188,7 +191,7 @@ xterm.js the reconnected screen is wrong.
 | `resources/service/` | systemd user unit + launchd plist templates |
 | `resources/scripts/installer-smoke.sh` | CI check of `install.sh`: pair, start, re-run keeps the server |
 | `.github/workflows/build.yml` | gofmt, go vet, go test, build, installer smoke test on push/PR |
-| `.github/workflows/release.yml` | Release on tag push |
+| `.github/workflows/release.yml` | Release on tag push, or on `main` when `VERSION` moves |
 
 ## Don't do
 
