@@ -94,7 +94,17 @@ fresh shell in the saved cwd.
 ```
 /ws/tab/{tabID}           # tab ownership + layout commands
 /ws/session/{sessionID}   # per-session PTY I/O; ?mode=watch for read-only
+                          # ?from=N replays the raw output stream from byte N
+                          # (resumable; for non-browser clients)
 ```
+
+A tab created with `{"command": "..."}` runs that one command
+(`shell -lc`) instead of a shell and is finished when it exits; it is
+never revived. The non-browser side of all this is specified in
+`docs/terminal-protocol.md`; the client that speaks it is
+`src/internal/termclient` plus the `pair|machines|shell|exec|help`
+subcommands in `src/cmd/termulaa/client.go`. Those subcommands are
+dispatched before `amarit.Start` and never start the server or agent.
 
 ### CWD tracking
 
@@ -184,7 +194,10 @@ xterm.js the reconnected screen is wrong.
 | `src/cmd/termulaa/tabs.go` | Binary split-tree layout helpers |
 | `src/cmd/termulaa/tunnel.go` | `-rc` reverse tunnel agent (pooled smux tunnels) |
 | `src/cmd/termulaa/wsconn.go` | WebSocket-as-net.Conn adapter for the tunnel |
+| `src/cmd/termulaa/client.go` | Terminal client subcommands (`pair`, `machines`, `shell`, `exec`); `help.go` their guides; `tty_*.go` local raw mode |
+| `src/internal/termclient/` | Client protocol logic (pair, sign-in, tab + session sockets, exec and shell loops with reconnect); no local-terminal code, reusable by other front ends |
 | `docs/rc-protocol.md` | Normative remote-access protocol spec |
+| `docs/terminal-protocol.md` | Normative tab + session WebSocket spec for non-browser clients |
 | `src/cmd/termulaa/ui/app.js` | Frontend — tabs, panes, xterm.js |
 | `build/build.sh` | Cross-compile to `dist/<os>/` |
 | `install.sh` | Release installer; `--service` sets up user services |

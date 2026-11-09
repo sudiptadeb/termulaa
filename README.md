@@ -198,6 +198,36 @@ Flags:
 See [SECURITY.md](SECURITY.md) for why this does not violate the
 loopback rule, and what the residual risks are.
 
+### From the command line
+
+The same binary is a terminal client. From any machine, it reaches a
+machine running the agent through the rendezvous, with no browser:
+
+```bash
+termulaa pair -server https://your.server 483-920   # one-time code from the dashboard
+termulaa machines                                   # who is connected right now
+termulaa shell laptop                               # interactive terminal, full-screen apps included
+termulaa exec laptop -- 'cd ~/src/app && make test' # run a command, exit with its exit code
+```
+
+`shell` is a real terminal: raw keyboard, resizes follow your window,
+vim and top work, and your local terminal is restored on every way out.
+`exec` is for scripts and agents: the command runs under the machine's
+login shell in a PTY, its output streams to stdout (stdout and stderr
+merged, as a terminal shows them), and the exit code is the command's
+own; 255 means termulaa itself failed, 130 that you interrupted it.
+
+Both run in a tab on the machine, so a dropped connection, a rendezvous
+redeploy or a network change does not touch the work: the client
+reconnects for up to fifteen minutes, the shell repaints from the
+machine's own copy of the screen, and `exec` resumes the output exactly
+where it stopped and still gets the exit code even if the command
+finished meanwhile. `termulaa help exec`, `termulaa help shell` and
+`termulaa help agents` (a walkthrough for automation with no TTY) have
+the details. The protocol a client speaks is specified in
+[docs/terminal-protocol.md](docs/terminal-protocol.md); the client
+logic lives in `src/internal/termclient` for other front ends to reuse.
+
 ## Hosting under a path prefix
 
 termulaa can be served behind a reverse proxy under a subpath (e.g.
@@ -374,7 +404,8 @@ browser tab you leave open next to whatever you're building.
 ```
 build/build.sh       # cross-compile to dist/<os>/
 src/cmd/termulaa/    # Go sources + embedded ui/
-docs/                # rc-protocol.md — the remote-access protocol spec
+src/internal/        # vterm (headless terminal emulator), termclient (terminal client logic)
+docs/                # rc-protocol.md and terminal-protocol.md — the protocol specs
 resources/plans/     # design docs
 resources/scripts/   # run + benchmark helpers
 resources/service/   # systemd user unit + launchd plist templates
@@ -397,6 +428,8 @@ Twind, xterm.js + addons — no npm, no bundler, no build step.
   state.json              # tabs + session metadata
   scrollback/<id>.raw     # per-session raw PTY output (ring buffer)
   history/<id>.hist       # per-session shell HISTFILE
+  rc.json                 # the agent's pairing (-rc)
+  client.json             # the terminal client's pairing (termulaa pair), mode 0600
 ```
 
 Settings are editable in-app at `/settings` or via `GET/PUT

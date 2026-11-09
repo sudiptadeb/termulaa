@@ -84,6 +84,14 @@ Residual risks, accepted knowingly when you opt in to `-rc`:
   your rendezvous. Never use it in production. It persists in
   `~/.termulaa/rc.json`; remove it with `-rc-insecure=false`.
 
+**The client's credential.** `termulaa pair` stores an app token for
+the rendezvous in `~/.termulaa/client.json` (mode 0600). It is the
+viewer side of the same capability: whoever holds it can sign in to the
+rendezvous as you and open a terminal on every machine paired to your
+account. Treat it like the tunnel token; revoke it from the rendezvous
+dashboard (paired devices) if the file leaks. The client never prints
+it.
+
 Not running `-rc` (the default) leaves the historical posture exactly as
 described above.
 
